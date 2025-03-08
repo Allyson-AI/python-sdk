@@ -30,7 +30,7 @@ setup(
     description="AI-powered web browser automation using Playwright",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/allyson-ai/allyson",
+    url="https://github.com/Allyson-AI/python-sdk",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
