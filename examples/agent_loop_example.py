@@ -2,7 +2,8 @@
 Example of using Allyson's AgentLoop to automate web browsing tasks.
 
 This example demonstrates how to use the AgentLoop to automate web browsing tasks
-using natural language instructions, including action chaining and the enter key tool.
+using natural language instructions, including action chaining, the enter key tool,
+and the planner feature for tracking progress.
 """
 
 import asyncio
@@ -27,9 +28,11 @@ async def run_agent_loop():
     Run the agent loop to automate a web browsing task.
     
     This example demonstrates:
-    1. Navigating to Google
-    2. Searching for a topic using action chaining (type + enter)
-    3. Finding information from the search results
+    1. Creating a plan for the task
+    2. Navigating to Google
+    3. Searching for a topic using action chaining (type + enter)
+    4. Finding information from the search results
+    5. Tracking progress using the plan
     """
     print("Running agent loop example...")
     
@@ -57,23 +60,27 @@ async def run_agent_loop():
             function=lambda location: get_weather(location)
         )
         
-        # Create a directory for screenshots
+        # Create directories for screenshots and plans
         screenshot_dir = "screenshots"
-        if not os.path.exists(screenshot_dir):
-            os.makedirs(screenshot_dir)
+        plan_dir = "plans"
+        
+        for directory in [screenshot_dir, plan_dir]:
+            if not os.path.exists(directory):
+                os.makedirs(directory)
         
         # Create an agent loop
         agent_loop = AgentLoop(
             browser=browser,
             agent=agent,
             tools=[weather_tool],
-            max_iterations=15,
+            max_steps=15,
             screenshot_dir=screenshot_dir,
+            plan_dir=plan_dir,
             verbose=True
         )
         
-        # Run the agent loop with a task that demonstrates action chaining
-        task = "Go to Google, search for 'Elon Musk', and find information about him"
+        # Run the agent loop with a task that demonstrates planning and action chaining
+        task = "Go to Google, search for 'Elon Musk', and find information about his companies"
         
         print(f"Running task: {task}")
         memory = await agent_loop.run(task)
@@ -121,6 +128,12 @@ async def run_agent_loop():
                     print(f"{i}. ASSISTANT: {content[:100]}...")
             else:
                 print(f"{i}. {role.upper()}: {content[:100]}...")
+        
+        # Print the final plan
+        if agent_loop.state.plan_path:
+            print("\nFinal Plan:")
+            with open(agent_loop.state.plan_path, "r") as f:
+                print(f.read())
 
 
 async def get_weather(location: str) -> Dict[str, Any]:

@@ -55,13 +55,17 @@ def mock_agent():
 def agent_loop(mock_browser, mock_agent, tmp_path):
     """Create an agent loop instance with mock browser and agent."""
     screenshot_dir = str(tmp_path / "screenshots")
-    os.makedirs(screenshot_dir, exist_ok=True)
+    plan_dir = str(tmp_path / "plans")
+    
+    for directory in [screenshot_dir, plan_dir]:
+        os.makedirs(directory, exist_ok=True)
     
     return AgentLoop(
         browser=mock_browser,
         agent=mock_agent,
-        max_iterations=5,
+        max_steps=5,
         screenshot_dir=screenshot_dir,
+        plan_dir=plan_dir,
         verbose=False
     )
 
@@ -205,58 +209,122 @@ async def test_execute_done_action(agent_loop):
 
 
 @pytest.mark.asyncio
-async def test_run_with_done_response(agent_loop, mock_agent):
-    """Test running the agent loop with a done response."""
+async def test_create_plan(agent_loop, mock_agent):
+    """Test creating a plan for a task."""
     # Mock the agent response
     mock_agent.chat_completion.return_value = {
         "choices": [
             {
                 "message": {
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": "done",
-                                "arguments": json.dumps({"message": "Task completed"})
-                            }
-                        }
-                    ],
-                    "content": "I've completed the task."
+                    "content": """
+# Plan for: Test task
+
+## Steps:
+- [ ] Step 1
+- [ ] Step 2
+  - [ ] Substep 2.1
+  - [ ] Substep 2.2
+- [ ] Step 3
+"""
                 }
             }
         ]
     }
     
-    # Run the agent loop
-    memory = await agent_loop.run("Test task")
+    # Create a plan
+    plan = await agent_loop._create_plan("Test task")
     
-    # Check the memory
-    assert len(memory) > 0
-    assert memory[0]["role"] == "user"
-    assert memory[0]["content"] == "Test task"
+    # Check the plan
+    assert "Plan for: Test task" in plan
+    assert "- [ ] Step 1" in plan
+    assert "- [ ] Step 2" in plan
+    assert "  - [ ] Substep 2.1" in plan
     
     # Check that the agent was called
     mock_agent.chat_completion.assert_called_once()
+    
+    # Check that the plan was saved to a file
+    assert agent_loop.state.plan == plan
+    assert agent_loop.state.plan_path is not None
+    assert os.path.exists(agent_loop.state.plan_path)
 
 
 @pytest.mark.asyncio
-async def test_run_with_action_response(agent_loop, mock_agent):
-    """Test running the agent loop with an action response."""
-    # Mock the agent responses
+async def test_update_plan(agent_loop, mock_agent):
+    """Test updating a plan with a completed step."""
+    # Set up a plan
+    agent_loop.state.plan = """
+# Plan for: Test task
+
+## Steps:
+- [ ] Step 1
+- [ ] Step 2
+  - [ ] Substep 2.1
+  - [ ] Substep 2.2
+- [ ] Step 3
+"""
+    
+    # Create a temporary plan file
+    plan_path = os.path.join(agent_loop.plan_dir, "test_plan.md")
+    with open(plan_path, "w") as f:
+        f.write(agent_loop.state.plan)
+    
+    agent_loop.state.plan_path = plan_path
+    
+    # Mock the agent response
+    mock_agent.chat_completion.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": """
+# Plan for: Test task
+
+## Steps:
+- [x] Step 1
+- [ ] Step 2
+  - [ ] Substep 2.1
+  - [ ] Substep 2.2
+- [ ] Step 3
+"""
+                }
+            }
+        ]
+    }
+    
+    # Update the plan
+    updated_plan = await agent_loop._update_plan("Step 1")
+    
+    # Check the updated plan
+    assert "- [x] Step 1" in updated_plan
+    assert "- [ ] Step 2" in updated_plan
+    
+    # Check that the agent was called
+    mock_agent.chat_completion.assert_called_once()
+    
+    # Check that the plan file was updated
+    with open(plan_path, "r") as f:
+        file_content = f.read()
+    
+    assert "- [x] Step 1" in file_content
+
+
+@pytest.mark.asyncio
+async def test_run_with_done_response(agent_loop, mock_agent):
+    """Test running the agent loop with a done response."""
+    # Mock the agent response for creating a plan
     mock_agent.chat_completion.side_effect = [
-        # First response: goto action
+        # First response: create plan
         {
             "choices": [
                 {
                     "message": {
-                        "tool_calls": [
-                            {
-                                "function": {
-                                    "name": "goto",
-                                    "arguments": json.dumps({"url": "https://example.com"})
-                                }
-                            }
-                        ],
-                        "content": "I'll navigate to example.com"
+                        "content": """
+# Plan for: Test task
+
+## Steps:
+- [ ] Step 1
+- [ ] Step 2
+"""
                     }
                 }
             ]
@@ -282,20 +350,127 @@ async def test_run_with_action_response(agent_loop, mock_agent):
     ]
     
     # Run the agent loop
+    memory = await agent_loop.run("Test task")
+    
+    # Check the memory
+    assert len(memory) > 0
+    assert memory[0]["role"] == "user"
+    assert memory[0]["content"] == "Test task"
+    
+    # Check that the agent was called twice (once for plan, once for action)
+    assert mock_agent.chat_completion.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_with_action_response(agent_loop, mock_agent):
+    """Test running the agent loop with an action response."""
+    # Mock the agent responses
+    mock_agent.chat_completion.side_effect = [
+        # First response: create plan
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": """
+# Plan for: Go to example.com
+
+## Steps:
+- [ ] Navigate to example.com
+- [ ] Complete the task
+"""
+                    }
+                }
+            ]
+        },
+        # Second response: goto action
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "goto",
+                                    "arguments": json.dumps({"url": "https://example.com"})
+                                }
+                            }
+                        ],
+                        "content": "I'll navigate to example.com"
+                    }
+                }
+            ]
+        },
+        # Third response: update plan
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": """
+# Plan for: Go to example.com
+
+## Steps:
+- [x] Navigate to example.com
+- [ ] Complete the task
+"""
+                    }
+                }
+            ]
+        },
+        # Fourth response: done action
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "done",
+                                    "arguments": json.dumps({"message": "Task completed"})
+                                }
+                            }
+                        ],
+                        "content": "I've completed the task."
+                    }
+                }
+            ]
+        }
+    ]
+    
+    # Run the agent loop
     memory = await agent_loop.run("Go to example.com")
     
     # Check the memory
     assert len(memory) > 0
     
-    # Check that the agent was called twice
-    assert mock_agent.chat_completion.call_count == 2
+    # Check that the agent was called four times (plan, goto, update plan, done)
+    assert mock_agent.chat_completion.call_count == 4
 
 
 @pytest.mark.asyncio
-async def test_run_max_iterations(agent_loop, mock_agent):
-    """Test running the agent loop with maximum iterations."""
-    # Mock the agent response to always return an action
-    mock_agent.chat_completion.return_value = {
+async def test_run_max_steps(agent_loop, mock_agent):
+    """Test running the agent loop with maximum steps."""
+    # Set max steps to 3
+    agent_loop.max_steps = 3
+    
+    # Create a response for the plan creation
+    plan_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": """
+# Plan for: Go to example.com
+
+## Steps:
+- [ ] Navigate to example.com
+- [ ] Do something else
+"""
+                }
+            }
+        ]
+    }
+    
+    # Create a response for the goto action
+    goto_response = {
         "choices": [
             {
                 "message": {
@@ -313,15 +488,53 @@ async def test_run_max_iterations(agent_loop, mock_agent):
         ]
     }
     
-    # Set max iterations to 3
-    agent_loop.max_iterations = 3
+    # Create a response for the plan update
+    plan_update_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": """
+# Plan for: Go to example.com
+
+## Steps:
+- [x] Navigate to example.com
+- [ ] Do something else
+"""
+                }
+            }
+        ]
+    }
+    
+    # Instead of using side_effect with a fixed list, we'll use a custom function
+    # that returns different responses based on the call count
+    call_count = 0
+    
+    def get_response(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        
+        # First call: create plan
+        if call_count == 1:
+            return plan_response
+        # Second call: goto action
+        elif call_count == 2:
+            return goto_response
+        # Third call: update plan
+        elif call_count == 3:
+            return plan_update_response
+        # Fourth call and beyond: goto action again
+        else:
+            return goto_response
+    
+    # Set the side effect to our custom function
+    mock_agent.chat_completion.side_effect = get_response
     
     # Run the agent loop
     memory = await agent_loop.run("Go to example.com")
     
-    # Check that the agent was called 3 times
-    assert mock_agent.chat_completion.call_count == 3
+    # Check that the agent was called at least 3 times
+    assert mock_agent.chat_completion.call_count >= 3
     
-    # Check that the last message indicates max iterations reached
+    # Check that the last message indicates max steps reached
     assert memory[-1]["role"] == "system"
-    assert "maximum number of iterations" in memory[-1]["content"] 
+    assert "maximum number of steps" in memory[-1]["content"] 

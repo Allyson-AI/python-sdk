@@ -51,6 +51,8 @@ class AgentState(BaseModel):
     interactive_elements: Optional[List[Dict[str, Any]]] = None
     screenshot_path: Optional[str] = None
     pending_actions: Optional[List[Dict[str, Any]]] = None
+    plan: Optional[str] = None
+    plan_path: Optional[str] = None
 
 
 class AgentMessage(BaseModel):
@@ -66,6 +68,19 @@ class AgentResponse(BaseModel):
     done: bool = False
 
 
+class PlanStep(BaseModel):
+    """A step in the plan."""
+    description: str
+    completed: bool = False
+    substeps: Optional[List["PlanStep"]] = None
+
+
+class Plan(BaseModel):
+    """A plan for completing a task."""
+    task: str
+    steps: List[PlanStep] = Field(default_factory=list)
+
+
 class AgentLoop:
     """
     Agent loop for executing tasks on web pages.
@@ -79,8 +94,9 @@ class AgentLoop:
         browser: Browser,
         agent: Agent,
         tools: Optional[List[Tool]] = None,
-        max_iterations: int = 10,
+        max_steps: int = 10,
         screenshot_dir: Optional[str] = None,
+        plan_dir: Optional[str] = None,
         verbose: bool = False,
     ):
         """
@@ -90,19 +106,25 @@ class AgentLoop:
             browser: Browser instance to use for the agent loop
             agent: Agent instance to use for the agent loop
             tools: Optional list of custom tools to add to the agent loop
-            max_iterations: Maximum number of iterations to run the agent loop
+            max_steps: Maximum number of steps to run the agent loop
             screenshot_dir: Directory to save screenshots to
+            plan_dir: Directory to save plan files to
             verbose: Whether to print verbose output
         """
         self.browser = browser
         self.agent = agent
-        self.max_iterations = max_iterations
+        self.max_steps = max_steps
         self.verbose = verbose
         
         # Create screenshot directory if it doesn't exist
         self.screenshot_dir = screenshot_dir
         if screenshot_dir and not os.path.exists(screenshot_dir):
             os.makedirs(screenshot_dir)
+        
+        # Create plan directory if it doesn't exist
+        self.plan_dir = plan_dir
+        if plan_dir and not os.path.exists(plan_dir):
+            os.makedirs(plan_dir)
         
         # Initialize state
         self.state = AgentState()
@@ -239,6 +261,147 @@ class AgentLoop:
                 error=str(e)
             )
     
+    async def _create_plan(self, task: str) -> str:
+        """
+        Create a plan for completing the task.
+        
+        Args:
+            task: Task to create a plan for
+            
+        Returns:
+            Markdown string of the plan
+        """
+        if self.verbose:
+            logger.info("Creating plan for task")
+        
+        # Create a system message for the planner
+        system_message = f"""
+You are a planning assistant that helps create a step-by-step plan for completing tasks.
+
+Your goal is to break down the given task into a series of milestones or steps that will help accomplish the task efficiently.
+
+The plan should:
+1. Break down the task into logical steps (not too many, not too few)
+2. Focus on key milestones rather than every small action
+3. Include substeps where appropriate for complex steps
+4. Be formatted as a Markdown checklist with checkboxes
+
+The plan will be used by an AI agent to track progress while completing the task.
+The agent has a maximum of {self.max_steps} steps to complete the task, but your plan should focus on logical milestones rather than trying to match this exact number.
+
+For quick tasks, the plan should be short, Do not over analyze the task.
+
+For example a quick task might be:
+Task: Search for elon musk
+[ ] Navigate to google
+[ ] Search for elon musk
+[ ] Extract Content from the page
+[ ] Summarize findings
+
+For example, a good plan might look like:
+
+```markdown
+# Plan for: Search for information about Python programming language
+
+## Steps:
+- [ ] Navigate to google
+- [ ] Search for "Python programming language"
+- [ ] Review search results
+  - [ ] Identify official Python website
+  - [ ] Identify Wikipedia page
+- [ ] Visit the most relevant page
+- [ ] Extract key information
+  - [ ] What is Python
+  - [ ] Key features
+  - [ ] Current version
+- [ ] Summarize findings
+```
+
+Now, create a plan for the following task: {task}
+"""
+        
+        # Create the messages for the agent
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"Create a plan for: {task}"}
+        ]
+        
+        # Get the response from the agent
+        response = self.agent.chat_completion(
+            messages=messages
+        )
+        
+        # Extract the plan from the response
+        plan_markdown = response["choices"][0]["message"]["content"]
+        
+        # Save the plan to a file if a plan directory is specified
+        if self.plan_dir:
+            timestamp = int(time.time())
+            plan_filename = f"plan_{timestamp}.md"
+            plan_path = os.path.join(self.plan_dir, plan_filename)
+            
+            with open(plan_path, "w") as f:
+                f.write(plan_markdown)
+            
+            self.state.plan_path = plan_path
+        
+        # Store the plan in the state
+        self.state.plan = plan_markdown
+        
+        return plan_markdown
+    
+    async def _update_plan(self, completed_step: str) -> str:
+        """
+        Update the plan with a completed step.
+        
+        Args:
+            completed_step: Description of the completed step
+            
+        Returns:
+            Updated markdown string of the plan
+        """
+        if not self.state.plan:
+            return ""
+        
+        if self.verbose:
+            logger.info(f"Updating plan: marking step as completed: {completed_step}")
+        
+        # Create a system message for the plan updater
+        system_message = """
+You are a planning assistant that helps update a task plan by marking steps as completed.
+
+Your goal is to update the given Markdown plan by finding the step that best matches the completed action and marking it as completed by replacing "[ ]" with "[x]".
+
+If the completed action doesn't exactly match any step in the plan, use your judgment to find the closest match.
+If multiple steps could match, choose the one that makes the most sense in the context of the plan's progression.
+
+Return the entire updated plan in Markdown format.
+"""
+        
+        # Create the messages for the agent
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"Here is the current plan:\n\n{self.state.plan}\n\nMark the following step as completed: {completed_step}"}
+        ]
+        
+        # Get the response from the agent
+        response = self.agent.chat_completion(
+            messages=messages
+        )
+        
+        # Extract the updated plan from the response
+        updated_plan = response["choices"][0]["message"]["content"]
+        
+        # Save the updated plan to the file if a plan path exists
+        if self.state.plan_path:
+            with open(self.state.plan_path, "w") as f:
+                f.write(updated_plan)
+        
+        # Update the plan in the state
+        self.state.plan = updated_plan
+        
+        return updated_plan
+    
     async def run(self, task: str) -> List[Dict[str, Any]]:
         """
         Run the agent loop with a task.
@@ -258,18 +421,27 @@ class AgentLoop:
             "content": task
         })
         
+        # Create a plan for the task
+        plan = await self._create_plan(task)
+        
+        # Add the plan to the memory
+        self.state.memory.append({
+            "role": "system",
+            "content": f"Here is the plan for completing this task:\n\n{plan}"
+        })
+        
         # Update the state
         await self._update_state()
         
         # Run the loop
-        iteration = 0
+        step = 0
         done = False
         
-        while iteration < self.max_iterations and not done:
-            iteration += 1
+        while step < self.max_steps and not done:
+            step += 1
             
             if self.verbose:
-                logger.info(f"Iteration {iteration}/{self.max_iterations}")
+                logger.info(f"Step {step}/{self.max_steps}")
             
             # Check if there are pending actions
             if hasattr(self.state, "pending_actions") and self.state.pending_actions:
@@ -361,15 +533,19 @@ class AgentLoop:
                     logger.info(f"Executing action: {response.action.tool} with parameters {response.action.parameters}")
                 
                 # Add the action to the memory
+                action_content = {
+                    "action": {
+                        "tool": response.action.tool,
+                        "parameters": response.action.parameters
+                    }
+                }
+                
+                if response.message and response.message.thinking:
+                    action_content["thinking"] = response.message.thinking
+                
                 self.state.memory.append({
                     "role": "assistant",
-                    "content": json.dumps({
-                        "action": {
-                            "tool": response.action.tool,
-                            "parameters": response.action.parameters
-                        },
-                        "thinking": response.message.thinking if response.message else None
-                    })
+                    "content": json.dumps(action_content)
                 })
                 
                 # Execute the action
@@ -409,6 +585,10 @@ class AgentLoop:
                 
                 # Update the last observation
                 self.state.last_observation = observation
+                
+                # Update the plan with the completed action
+                action_description = f"{response.action.tool}: {json.dumps(response.action.parameters)}"
+                await self._update_plan(action_description)
             
             # Add the message to the memory if there is one
             if response.message and not response.action:
@@ -417,14 +597,14 @@ class AgentLoop:
                     "content": response.message.message
                 })
         
-        # Check if we reached the maximum number of iterations
-        if iteration >= self.max_iterations and not done:
-            logger.warning(f"Reached maximum number of iterations ({self.max_iterations})")
+        # Check if we reached the maximum number of steps
+        if step >= self.max_steps and not done:
+            logger.warning(f"Reached maximum number of steps ({self.max_steps})")
             
             # Add a message to the memory
             self.state.memory.append({
                 "role": "system",
-                "content": f"Reached maximum number of iterations ({self.max_iterations})"
+                "content": f"Reached maximum number of steps ({self.max_steps})"
             })
         
         return self.state.memory
@@ -531,7 +711,13 @@ Remember to:
 3. Provide clear explanations of your actions
 4. Complete the task efficiently
 5. Chain actions together when it makes sense to do so
+6. Follow the plan provided to you
 """
+        
+        # Add the plan if available
+        if self.state.plan:
+            system_message += f"\n\nHere is the plan for completing this task:\n\n{self.state.plan}\n"
+            system_message += "\nFollow this plan to complete the task. Mark steps as completed as you go."
         
         # Add the current state
         state_info = f"""
