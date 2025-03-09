@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="allyson",
-    version="0.1.6",
+    version="0.1.7",
     packages=find_packages(),
     install_requires=[
         "playwright>=1.40.0",
@@ -11,6 +11,7 @@ setup(
         "pydantic>=2.0.0",
         "pytest-asyncio>=0.21.0",
         "pillow>=10.0.0",
+        "playwright-stealth>=1.0.6",
     ],
     extras_require={
         "dev": [

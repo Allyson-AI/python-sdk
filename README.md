@@ -24,6 +24,7 @@ python -m playwright install
 - DOM extraction and analysis for AI integration
 - Screenshot annotation with element bounding boxes
 - Agent loop for automating tasks with natural language
+- Built-in anti-detection features to avoid bot detection
 
 ## Quick Start
 ```python
@@ -94,6 +95,19 @@ browser = Browser(executable_path="/usr/bin/google-chrome")
 ```
 
 This is especially useful for automation tasks that require specific browser versions or configurations.
+
+### Built-in Anti-Detection Features
+
+Allyson includes built-in anti-detection features to help avoid bot detection systems. These features are always enabled and require no configuration:
+
+The anti-detection features include:
+
+1. **Playwright Stealth**: Automatically applies various techniques to make the browser appear more like a regular user browser.
+2. **Realistic User Agent**: Uses a modern Chrome user agent string.
+3. **Standard Viewport**: Sets a common desktop resolution (1280x720).
+4. **Browser Fingerprint Protection**: Modifies browser properties that are commonly used for fingerprinting.
+
+These features help avoid detection when automating websites that have anti-bot measures, making your automation more reliable.
 
 ### Agent Loop Features
 
@@ -172,6 +186,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details. 
 
 ## Changelog
+- **0.1.7** - Added built-in anti-detection features with playwright-stealth integration
 - **0.1.6** - Added support for custom Chrome browser path
 - **0.1.5** - Added planner feature for creating and tracking task progress
 - **0.1.4** - Enhanced agent loop with action chaining, Enter key tool, and improved error handling

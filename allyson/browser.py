@@ -11,6 +11,12 @@ from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
 
 from allyson.page import Page
+from allyson.stealth import (
+    apply_stealth_sync,
+    apply_stealth_async,
+    get_anti_detection_args,
+    CHROME_USER_AGENT
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +58,7 @@ class Browser:
         self.headless = headless
         self.slow_mo = slow_mo
         self.viewport = viewport or {"width": 1280, "height": 720}
-        self.user_agent = user_agent
+        self.user_agent = user_agent or CHROME_USER_AGENT
         self.locale = locale
         self.timeout = timeout
         self.proxy = proxy
@@ -113,17 +119,30 @@ class Browser:
         
         self._browser = browser_type.launch(**launch_options)
         
-        # Create a new page
+        # Create a new page with anti-detection settings
         context_options = {}
-        if self.viewport:
-            context_options["viewport"] = self.viewport
+        
+        # Apply anti-detection settings (always enabled)
+        anti_detection_args = get_anti_detection_args()
+        # Override viewport size in anti-detection args
+        anti_detection_args["viewport"] = self.viewport
+        context_options.update(anti_detection_args)
+            
+        # Override with user-provided settings if specified
         if self.user_agent:
             context_options["user_agent"] = self.user_agent
         if self.locale:
             context_options["locale"] = self.locale
             
         self._context = self._browser.new_context(**context_options)
-        self._page = Page(self._context.new_page(), is_async=False)
+        
+        # Create a new page
+        playwright_page = self._context.new_page()
+        
+        # Apply stealth mode (always enabled)
+        apply_stealth_sync(playwright_page)
+            
+        self._page = Page(playwright_page, is_async=False)
 
     async def _launch_async(self):
         """Launch the browser in asynchronous mode."""
@@ -155,17 +174,30 @@ class Browser:
         
         self._browser = await browser_type.launch(**launch_options)
         
-        # Create a new page
+        # Create a new page with anti-detection settings
         context_options = {}
-        if self.viewport:
-            context_options["viewport"] = self.viewport
+        
+        # Apply anti-detection settings (always enabled)
+        anti_detection_args = get_anti_detection_args()
+        # Override viewport size in anti-detection args
+        anti_detection_args["viewport"] = self.viewport
+        context_options.update(anti_detection_args)
+            
+        # Override with user-provided settings if specified
         if self.user_agent:
             context_options["user_agent"] = self.user_agent
         if self.locale:
             context_options["locale"] = self.locale
             
         self._context = await self._browser.new_context(**context_options)
-        self._page = Page(await self._context.new_page(), is_async=True)
+        
+        # Create a new page
+        playwright_page = await self._context.new_page()
+        
+        # Apply stealth mode (always enabled)
+        await apply_stealth_async(playwright_page)
+            
+        self._page = Page(playwright_page, is_async=True)
 
     def goto(self, url: str, wait_until: str = "load", timeout: Optional[int] = None):
         """
@@ -197,14 +229,25 @@ class Browser:
         """Create a new page in the browser context."""
         if self._is_async:
             raise RuntimeError("Use 'await browser.new_page()' in async mode")
-        return Page(self._context.new_page())
+        
+        playwright_page = self._context.new_page()
+        
+        # Apply stealth mode (always enabled)
+        apply_stealth_sync(playwright_page)
+            
+        return Page(playwright_page, is_async=False)
 
     async def anew_page(self):
         """Create a new page in the browser context (async version)."""
         if not self._is_async:
             raise RuntimeError("Use 'browser.new_page()' in sync mode")
-        page = await self._context.new_page()
-        return Page(page, is_async=True)
+        
+        playwright_page = await self._context.new_page()
+        
+        # Apply stealth mode (always enabled)
+        await apply_stealth_async(playwright_page)
+            
+        return Page(playwright_page, is_async=True)
 
     def close(self):
         """Close the browser and clean up resources."""

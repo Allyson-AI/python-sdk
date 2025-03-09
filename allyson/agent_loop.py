@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class ActionStatus(str, Enum):
     """Status of an action execution."""
+
     SUCCESS = "success"
     ERROR = "error"
     PENDING = "pending"
@@ -31,12 +32,14 @@ class ActionStatus(str, Enum):
 
 class Action(BaseModel):
     """Base model for an action to be executed by the agent."""
+
     tool: str
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Observation(BaseModel):
     """Observation from executing an action."""
+
     status: ActionStatus
     data: Any = None
     error: Optional[str] = None
@@ -44,6 +47,7 @@ class Observation(BaseModel):
 
 class AgentState(BaseModel):
     """State of the agent during execution."""
+
     memory: List[Dict[str, Any]] = Field(default_factory=list)
     current_url: Optional[str] = None
     page_title: Optional[str] = None
@@ -57,12 +61,14 @@ class AgentState(BaseModel):
 
 class AgentMessage(BaseModel):
     """Message from the agent to the user."""
+
     message: str
     thinking: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
     """Response from the agent."""
+
     action: Optional[Action] = None
     message: Optional[AgentMessage] = None
     done: bool = False
@@ -70,6 +76,7 @@ class AgentResponse(BaseModel):
 
 class PlanStep(BaseModel):
     """A step in the plan."""
+
     description: str
     completed: bool = False
     substeps: Optional[List["PlanStep"]] = None
@@ -77,6 +84,7 @@ class PlanStep(BaseModel):
 
 class Plan(BaseModel):
     """A plan for completing a task."""
+
     task: str
     steps: List[PlanStep] = Field(default_factory=list)
 
@@ -84,11 +92,11 @@ class Plan(BaseModel):
 class AgentLoop:
     """
     Agent loop for executing tasks on web pages.
-    
+
     This class provides a loop that takes user instructions, sends them to an AI agent,
     and executes the resulting actions on a web page.
     """
-    
+
     def __init__(
         self,
         browser: Browser,
@@ -101,7 +109,7 @@ class AgentLoop:
     ):
         """
         Initialize the agent loop.
-        
+
         Args:
             browser: Browser instance to use for the agent loop
             agent: Agent instance to use for the agent loop
@@ -115,60 +123,60 @@ class AgentLoop:
         self.agent = agent
         self.max_steps = max_steps
         self.verbose = verbose
-        
+
         # Create screenshot directory if it doesn't exist
         self.screenshot_dir = screenshot_dir
         if screenshot_dir and not os.path.exists(screenshot_dir):
             os.makedirs(screenshot_dir)
-        
+
         # Create plan directory if it doesn't exist
         self.plan_dir = plan_dir
         if plan_dir and not os.path.exists(plan_dir):
             os.makedirs(plan_dir)
-        
+
         # Initialize state
         self.state = AgentState()
-        
+
         # Create DOM extractor if it doesn't exist
-        if not hasattr(self.browser, '_dom_extractor'):
+        if not hasattr(self.browser, "_dom_extractor"):
             self.browser._dom_extractor = DOMExtractor(self.browser._page)
-        
+
         # Initialize tools
         self.tools = {}
         self._register_default_tools()
-        
+
         # Register custom tools
         if tools:
             for tool in tools:
                 self.register_tool(tool)
-    
+
     def _register_default_tools(self):
         """Register default tools for the agent loop."""
         default_tools = get_default_tools(self.browser)
         for tool in default_tools:
             self.register_tool(tool)
-    
+
     def register_tool(self, tool: Tool):
         """
         Register a tool with the agent loop.
-        
+
         Args:
             tool: Tool to register
         """
         if tool.name in self.tools:
             logger.warning(f"Tool {tool.name} already registered, overwriting")
-        
+
         self.tools[tool.name] = tool
-    
+
     def get_tools_schema(self) -> List[Dict[str, Any]]:
         """
         Get the schema for all registered tools.
-        
+
         Returns:
             List of tool schemas
         """
         tools_schema = []
-        
+
         for tool_name, tool in self.tools.items():
             # Create a schema for the tool
             schema = {
@@ -179,101 +187,97 @@ class AgentLoop:
                     "parameters": {
                         "type": "object",
                         "properties": tool.parameters_schema,
-                        "required": list(tool.parameters_schema.keys())
-                    }
-                }
+                        "required": list(tool.parameters_schema.keys()),
+                    },
+                },
             }
-            
+
             tools_schema.append(schema)
-        
+
         return tools_schema
-    
+
     async def _update_state(self):
         """Update the agent state with the current page state."""
         # Get the current URL and title
-        self.state.current_url = await self.browser._page.aevaluate("window.location.href")
+        self.state.current_url = await self.browser._page.aevaluate(
+            "window.location.href"
+        )
         self.state.page_title = await self.browser._page.aevaluate("document.title")
-        
+
         # Extract interactive elements
         dom_extractor = self.browser._dom_extractor
-        self.state.interactive_elements = await dom_extractor.extract_interactive_elements()
-        
+        self.state.interactive_elements = (
+            await dom_extractor.extract_interactive_elements()
+        )
+
         # Take a screenshot
         if self.screenshot_dir:
             timestamp = int(time.time())
-            screenshot_path = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}.png")
-            
+            screenshot_path = os.path.join(
+                self.screenshot_dir, f"screenshot_{timestamp}.png"
+            )
+
             # Take a screenshot with annotations
             result = await dom_extractor.screenshot_with_annotations(
                 path=screenshot_path,
                 elements=self.state.interactive_elements,
-                show_element_ids=True
+                show_element_ids=True,
             )
-            
+
             self.state.screenshot_path = result["annotated"]
-    
+
     async def _execute_action(self, action: Action) -> Observation:
         """
         Execute an action and return the observation.
-        
+
         Args:
             action: Action to execute
-            
+
         Returns:
             Observation from executing the action
         """
         # Check if the tool exists
         if action.tool not in self.tools:
             return Observation(
-                status=ActionStatus.ERROR,
-                error=f"Tool {action.tool} not found"
+                status=ActionStatus.ERROR, error=f"Tool {action.tool} not found"
             )
-        
+
         # Get the tool
         tool = self.tools[action.tool]
-        
+
         try:
             # Execute the tool function with the parameters
             result = tool.function(**action.parameters)
-            
+
             # If the result is a coroutine, await it
             if asyncio.iscoroutine(result):
                 result = await result
-            
+
             # Check if the task is done
             if action.tool == "done":
-                return Observation(
-                    status=ActionStatus.SUCCESS,
-                    data=result
-                )
-            
+                return Observation(status=ActionStatus.SUCCESS, data=result)
+
             # Update the state
             await self._update_state()
-            
-            return Observation(
-                status=ActionStatus.SUCCESS,
-                data=result
-            )
+
+            return Observation(status=ActionStatus.SUCCESS, data=result)
         except Exception as e:
             logger.exception(f"Error executing action {action.tool}: {e}")
-            return Observation(
-                status=ActionStatus.ERROR,
-                error=str(e)
-            )
-    
+            return Observation(status=ActionStatus.ERROR, error=str(e))
+
     async def _create_plan(self, task: str) -> str:
         """
         Create a plan for completing the task.
-        
+
         Args:
             task: Task to create a plan for
-            
+
         Returns:
             Markdown string of the plan
         """
         if self.verbose:
             logger.info("Creating plan for task")
-        
+
         # Create a system message for the planner
         system_message = f"""
 You are a planning assistant that helps create a step-by-step plan for completing tasks.
@@ -290,18 +294,25 @@ The plan will be used by an AI agent to track progress while completing the task
 The agent has a maximum of {self.max_steps} steps to complete the task, but your plan should focus on logical milestones rather than trying to match this exact number.
 
 For quick tasks, the plan should be short, Do not over analyze the task.
+For longer tasks, the plan should be more detailed and come up with things that relate to the task that will help the ai agent even more than what was in teh users original prompt.
+Think of a more complex plan for longer tasks so the agent can provide information teh user never even would have thought of doing. Use a high IQ plan for longer tasks at the PHD level.
 
 For example a quick task might be:
 Task: Search for elon musk
-[ ] Navigate to google
-[ ] Search for elon musk
-[ ] Extract Content from the page
-[ ] Summarize findings
-
-For example, a good plan might look like:
 
 ```markdown
-# Plan for: Search for information about Python programming language
+# Plan for: Search for information about Elon Musk
+[ ] Navigate to google
+[ ] Search for 'elon musk'
+[ ] Extract Content from the page
+[ ] Summarize findings
+```
+
+
+For example, a good plan might look like:
+Task: Search for Python programming language and get me the most relevant information
+```markdown
+# Plan for: Search for Python programming language and get me the most relevant information
 
 ## Steps:
 - [ ] Navigate to google
@@ -316,56 +327,55 @@ For example, a good plan might look like:
   - [ ] Current version
 - [ ] Summarize findings
 ```
+Understand the detail in the prompt and the words the users uses so you know how to get the right amount of steps in the plan.
 
 Now, create a plan for the following task: {task}
 """
-        
+
         # Create the messages for the agent
         messages = [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": f"Create a plan for: {task}"}
+            {"role": "user", "content": f"Create a plan for: {task}"},
         ]
-        
+
         # Get the response from the agent
-        response = self.agent.chat_completion(
-            messages=messages
-        )
-        
+        response = self.agent.chat_completion(messages=messages)
+
         # Extract the plan from the response
         plan_markdown = response["choices"][0]["message"]["content"]
-        
+
         # Save the plan to a file if a plan directory is specified
         if self.plan_dir:
             timestamp = int(time.time())
             plan_filename = f"plan_{timestamp}.md"
             plan_path = os.path.join(self.plan_dir, plan_filename)
-            
+
             with open(plan_path, "w") as f:
                 f.write(plan_markdown)
-            
+
             self.state.plan_path = plan_path
-        
+
         # Store the plan in the state
         self.state.plan = plan_markdown
-        
+
         return plan_markdown
-    
+
     async def _update_plan(self, completed_step: str) -> str:
         """
         Update the plan with a completed step.
-        
+
         Args:
             completed_step: Description of the completed step
-            
+
         Returns:
             Updated markdown string of the plan
         """
         if not self.state.plan:
             return ""
-        
+
         if self.verbose:
             logger.info(f"Updating plan: marking step as completed: {completed_step}")
-        
+
         # Create a system message for the plan updater
         system_message = """
 You are a planning assistant that helps update a task plan by marking steps as completed.
@@ -377,271 +387,299 @@ If multiple steps could match, choose the one that makes the most sense in the c
 
 Return the entire updated plan in Markdown format.
 """
-        
+
         # Create the messages for the agent
         messages = [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": f"Here is the current plan:\n\n{self.state.plan}\n\nMark the following step as completed: {completed_step}"}
+            {
+                "role": "user",
+                "content": f"Here is the current plan:\n\n{self.state.plan}\n\nMark the following step as completed: {completed_step}",
+            },
         ]
-        
+
         # Get the response from the agent
-        response = self.agent.chat_completion(
-            messages=messages
-        )
-        
+        response = self.agent.chat_completion(messages=messages)
+
         # Extract the updated plan from the response
         updated_plan = response["choices"][0]["message"]["content"]
-        
+
         # Save the updated plan to the file if a plan path exists
         if self.state.plan_path:
             with open(self.state.plan_path, "w") as f:
                 f.write(updated_plan)
-        
+
         # Update the plan in the state
         self.state.plan = updated_plan
-        
+
         return updated_plan
-    
+
     async def run(self, task: str) -> List[Dict[str, Any]]:
         """
         Run the agent loop with a task.
-        
+
         Args:
             task: Task to run
-            
+
         Returns:
             Memory of the agent loop
         """
         # Initialize the state
         self.state = AgentState()
-        
+
         # Add the task to the memory
-        self.state.memory.append({
-            "role": "user",
-            "content": task
-        })
-        
+        self.state.memory.append({"role": "user", "content": task})
+
         # Create a plan for the task
         plan = await self._create_plan(task)
-        
+
         # Add the plan to the memory
-        self.state.memory.append({
-            "role": "system",
-            "content": f"Here is the plan for completing this task:\n\n{plan}"
-        })
-        
+        self.state.memory.append(
+            {
+                "role": "system",
+                "content": f"Here is the plan for completing this task:\n\n{plan}",
+            }
+        )
+
         # Update the state
         await self._update_state()
-        
+
         # Run the loop
         step = 0
         done = False
-        
+
         while step < self.max_steps and not done:
             step += 1
-            
+
             if self.verbose:
                 logger.info(f"Step {step}/{self.max_steps}")
-            
+
             # Check if there are pending actions
             if hasattr(self.state, "pending_actions") and self.state.pending_actions:
                 # Get the next action from pending actions
                 action_data = self.state.pending_actions.pop(0)
                 tool_name = action_data.get("tool")
                 parameters = action_data.get("parameters", {})
-                
+
                 # Check if the action is "done"
                 if tool_name == "done":
                     if self.verbose:
-                        logger.info(f"Task is done from pending action: {parameters.get('message', 'No message')}")
-                    
+                        logger.info(
+                            f"Task is done from pending action: {parameters.get('message', 'No message')}"
+                        )
+
                     # Add the observation to the memory
-                    self.state.memory.append({
-                        "role": "system",
-                        "content": json.dumps({
-                            "observation": {
-                                "status": ActionStatus.SUCCESS,
-                                "data": {"done": True, "message": parameters.get("message", "Task completed")},
-                                "error": None
-                            }
-                        })
-                    })
-                    
+                    self.state.memory.append(
+                        {
+                            "role": "system",
+                            "content": json.dumps(
+                                {
+                                    "observation": {
+                                        "status": ActionStatus.SUCCESS,
+                                        "data": {
+                                            "done": True,
+                                            "message": parameters.get(
+                                                "message", "Task completed"
+                                            ),
+                                        },
+                                        "error": None,
+                                    }
+                                }
+                            ),
+                        }
+                    )
+
                     done = True
                     continue
-                
+
                 # Create the action
-                action = Action(
-                    tool=tool_name,
-                    parameters=parameters
-                )
-                
+                action = Action(tool=tool_name, parameters=parameters)
+
                 # Add the action to the memory
-                self.state.memory.append({
-                    "role": "assistant",
-                    "content": json.dumps({
-                        "action": {
-                            "tool": action.tool,
-                            "parameters": action.parameters
-                        },
-                        "thinking": "Executing pending action"
-                    })
-                })
-                
+                self.state.memory.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "action": {
+                                    "tool": action.tool,
+                                    "parameters": action.parameters,
+                                },
+                                "thinking": "Executing pending action",
+                            }
+                        ),
+                    }
+                )
+
                 # Execute the action
                 observation = await self._execute_action(action)
-                
+
                 # Add the observation to the memory
-                self.state.memory.append({
-                    "role": "system",
-                    "content": json.dumps({
-                        "observation": {
-                            "status": observation.status,
-                            "data": observation.data,
-                            "error": observation.error
-                        }
-                    })
-                })
-                
+                self.state.memory.append(
+                    {
+                        "role": "system",
+                        "content": json.dumps(
+                            {
+                                "observation": {
+                                    "status": observation.status,
+                                    "data": observation.data,
+                                    "error": observation.error,
+                                }
+                            }
+                        ),
+                    }
+                )
+
                 # Update the last observation
                 self.state.last_observation = observation
-                
+
                 # Continue to the next iteration
                 continue
-            
+
             # Get the agent response
             response = await self._get_agent_response()
-            
+
             # Check if the agent is done
             if response.done:
                 if self.verbose:
-                    logger.info(f"Agent is done: {response.message.message if response.message else 'No message'}")
-                
+                    logger.info(
+                        f"Agent is done: {response.message.message if response.message else 'No message'}"
+                    )
+
                 # Add the message to the memory
                 if response.message:
-                    self.state.memory.append({
-                        "role": "assistant",
-                        "content": response.message.message
-                    })
-                
+                    self.state.memory.append(
+                        {"role": "assistant", "content": response.message.message}
+                    )
+
                 done = True
                 continue
-            
+
             # Execute the action
             if response.action:
                 if self.verbose:
-                    logger.info(f"Executing action: {response.action.tool} with parameters {response.action.parameters}")
-                
+                    logger.info(
+                        f"Executing action: {response.action.tool} with parameters {response.action.parameters}"
+                    )
+
                 # Add the action to the memory
                 action_content = {
                     "action": {
                         "tool": response.action.tool,
-                        "parameters": response.action.parameters
+                        "parameters": response.action.parameters,
                     }
                 }
-                
+
                 if response.message and response.message.thinking:
                     action_content["thinking"] = response.message.thinking
-                
-                self.state.memory.append({
-                    "role": "assistant",
-                    "content": json.dumps(action_content)
-                })
-                
+
+                self.state.memory.append(
+                    {"role": "assistant", "content": json.dumps(action_content)}
+                )
+
                 # Execute the action
                 observation = await self._execute_action(response.action)
-                
+
                 # Check if the task is done
                 if response.action.tool == "done":
                     if self.verbose:
-                        logger.info(f"Task is done: {observation.data.get('message', 'No message')}")
-                    
+                        logger.info(
+                            f"Task is done: {observation.data.get('message', 'No message')}"
+                        )
+
                     # Add the observation to the memory
-                    self.state.memory.append({
-                        "role": "system",
-                        "content": json.dumps({
-                            "observation": {
-                                "status": observation.status,
-                                "data": observation.data,
-                                "error": observation.error
-                            }
-                        })
-                    })
-                    
+                    self.state.memory.append(
+                        {
+                            "role": "system",
+                            "content": json.dumps(
+                                {
+                                    "observation": {
+                                        "status": observation.status,
+                                        "data": observation.data,
+                                        "error": observation.error,
+                                    }
+                                }
+                            ),
+                        }
+                    )
+
                     done = True
                     continue
-                
+
                 # Add the observation to the memory
-                self.state.memory.append({
-                    "role": "system",
-                    "content": json.dumps({
-                        "observation": {
-                            "status": observation.status,
-                            "data": observation.data,
-                            "error": observation.error
-                        }
-                    })
-                })
-                
+                self.state.memory.append(
+                    {
+                        "role": "system",
+                        "content": json.dumps(
+                            {
+                                "observation": {
+                                    "status": observation.status,
+                                    "data": observation.data,
+                                    "error": observation.error,
+                                }
+                            }
+                        ),
+                    }
+                )
+
                 # Update the last observation
                 self.state.last_observation = observation
-                
+
                 # Update the plan with the completed action
-                action_description = f"{response.action.tool}: {json.dumps(response.action.parameters)}"
+                action_description = (
+                    f"{response.action.tool}: {json.dumps(response.action.parameters)}"
+                )
                 await self._update_plan(action_description)
-            
+
             # Add the message to the memory if there is one
             if response.message and not response.action:
-                self.state.memory.append({
-                    "role": "assistant",
-                    "content": response.message.message
-                })
-        
+                self.state.memory.append(
+                    {"role": "assistant", "content": response.message.message}
+                )
+
         # Check if we reached the maximum number of steps
         if step >= self.max_steps and not done:
             logger.warning(f"Reached maximum number of steps ({self.max_steps})")
-            
+
             # Add a message to the memory
-            self.state.memory.append({
-                "role": "system",
-                "content": f"Reached maximum number of steps ({self.max_steps})"
-            })
-        
+            self.state.memory.append(
+                {
+                    "role": "system",
+                    "content": f"Reached maximum number of steps ({self.max_steps})",
+                }
+            )
+
         return self.state.memory
-    
+
     async def _get_agent_response(self) -> AgentResponse:
         """
         Get a response from the agent.
-        
+
         Returns:
             Agent response
         """
         # Create the messages for the agent
-        messages = [
-            {"role": "system", "content": self._get_system_message()}
-        ]
-        
+        messages = [{"role": "system", "content": self._get_system_message()}]
+
         # Add the memory to the messages
         for message in self.state.memory:
             messages.append(message)
-        
+
         # Get the response from the agent
         response = self.agent.chat_completion(
-            messages=messages,
-            tools=self.get_tools_schema()
+            messages=messages, tools=self.get_tools_schema()
         )
-        
+
         # Debug log the response
         if self.verbose:
             logger.info(f"Agent response: {json.dumps(response, indent=2)}")
-        
+
         # Parse the response
         return self._parse_agent_response(response)
-    
+
     def _get_system_message(self) -> str:
         """
         Get the system message for the agent.
-        
+
         Returns:
             System message
         """
@@ -713,12 +751,14 @@ Remember to:
 5. Chain actions together when it makes sense to do so
 6. Follow the plan provided to you
 """
-        
+
         # Add the plan if available
         if self.state.plan:
-            system_message += f"\n\nHere is the plan for completing this task:\n\n{self.state.plan}\n"
+            system_message += (
+                f"\n\nHere is the plan for completing this task:\n\n{self.state.plan}\n"
+            )
             system_message += "\nFollow this plan to complete the task. Mark steps as completed as you go."
-        
+
         # Add the current state
         state_info = f"""
 Current state:
@@ -726,7 +766,7 @@ Current state:
 - Title: {self.state.page_title}
 - Interactive elements:
 """
-        
+
         # Add the interactive elements
         if self.state.interactive_elements:
             for i, element in enumerate(self.state.interactive_elements, 1):
@@ -736,19 +776,19 @@ Current state:
                 state_info += f"  {i}. {element_type}: {text}\n"
         else:
             state_info += "  No interactive elements found\n"
-        
+
         # Add the screenshot path if available
         if self.state.screenshot_path:
             state_info += f"\nA screenshot of the page with annotated elements is available at: {self.state.screenshot_path}\n"
-        
+
         # Add the action history
         if len(self.state.memory) > 1:  # Skip the initial user message
             action_history = "\nAction history:\n"
-            
+
             for i, message in enumerate(self.state.memory[1:], 1):
                 role = message.get("role", "")
                 content = message.get("content", "")
-                
+
                 if role == "assistant" and content and content.startswith("{"):
                     try:
                         data = json.loads(content)
@@ -756,7 +796,9 @@ Current state:
                             action = data["action"]
                             tool = action.get("tool", "unknown")
                             params = action.get("parameters", {})
-                            action_history += f"  {i}. Used tool: {tool} with parameters: {params}\n"
+                            action_history += (
+                                f"  {i}. Used tool: {tool} with parameters: {params}\n"
+                            )
                     except:
                         pass
                 elif role == "system" and content and content.startswith("{"):
@@ -767,168 +809,152 @@ Current state:
                             status = observation.get("status", "unknown")
                             data_result = observation.get("data", {})
                             error = observation.get("error")
-                            
+
                             if status == "success":
-                                action_history += f"  {i}. Result: Success - {data_result}\n"
+                                action_history += (
+                                    f"  {i}. Result: Success - {data_result}\n"
+                                )
                             else:
                                 action_history += f"  {i}. Result: Error - {error}\n"
                     except:
                         pass
-            
+
             state_info += action_history
-        
+
         return system_message + state_info
-    
+
     def _parse_agent_response(self, response: Dict[str, Any]) -> AgentResponse:
         """
         Parse the response from the agent.
-        
+
         Args:
             response: Response from the agent
-            
+
         Returns:
             Parsed agent response
         """
         # Get the message from the response
         message = response["choices"][0]["message"]
         content = message.get("content", "")
-        
+
         # Check if the response has tool calls
         tool_calls = message.get("tool_calls", [])
         if tool_calls:
             # Get the first tool call
             tool_call = tool_calls[0]
-            
+
             # Get the tool name and parameters
             tool_name = tool_call["function"]["name"]
-            
+
             try:
                 parameters = json.loads(tool_call["function"]["arguments"])
             except json.JSONDecodeError:
-                logger.error(f"Error parsing tool parameters: {tool_call['function']['arguments']}")
+                logger.error(
+                    f"Error parsing tool parameters: {tool_call['function']['arguments']}"
+                )
                 parameters = {}
-            
+
             # Check if the tool is "done"
             if tool_name == "done":
                 return AgentResponse(
                     done=True,
                     message=AgentMessage(
                         message=parameters.get("message", "Task completed"),
-                        thinking=response.get("thinking")
-                    )
+                        thinking=response.get("thinking"),
+                    ),
                 )
-            
+
             # Create the action
-            action = Action(
-                tool=tool_name,
-                parameters=parameters
-            )
-            
+            action = Action(tool=tool_name, parameters=parameters)
+
             # Create the message
             message_obj = None
             if content:
                 message_obj = AgentMessage(
-                    message=content,
-                    thinking=response.get("thinking")
+                    message=content, thinking=response.get("thinking")
                 )
-            
-            return AgentResponse(
-                action=action,
-                message=message_obj
-            )
-        
+
+            return AgentResponse(action=action, message=message_obj)
+
         # Check if the content is a JSON string with an action or actions
         if content and content.strip().startswith("{"):
             try:
                 content_json = json.loads(content)
-                
+
                 # Check for a single action
                 if "action" in content_json:
                     action_data = content_json["action"]
                     tool_name = action_data.get("tool")
                     parameters = action_data.get("parameters", {})
-                    
+
                     # Check if the tool is "done"
                     if tool_name == "done":
                         return AgentResponse(
                             done=True,
                             message=AgentMessage(
                                 message=parameters.get("message", "Task completed"),
-                                thinking=content_json.get("thinking")
-                            )
+                                thinking=content_json.get("thinking"),
+                            ),
                         )
-                    
+
                     # Create the action
-                    action = Action(
-                        tool=tool_name,
-                        parameters=parameters
-                    )
-                    
+                    action = Action(tool=tool_name, parameters=parameters)
+
                     # Create the message
                     message_obj = None
                     if "thinking" in content_json:
                         message_obj = AgentMessage(
-                            message="",
-                            thinking=content_json.get("thinking")
+                            message="", thinking=content_json.get("thinking")
                         )
-                    
-                    return AgentResponse(
-                        action=action,
-                        message=message_obj
-                    )
-                
+
+                    return AgentResponse(action=action, message=message_obj)
+
                 # Check for multiple actions
                 if "actions" in content_json:
                     actions_data = content_json["actions"]
-                    if actions_data and isinstance(actions_data, list) and len(actions_data) > 0:
+                    if (
+                        actions_data
+                        and isinstance(actions_data, list)
+                        and len(actions_data) > 0
+                    ):
                         # Get the first action
                         action_data = actions_data[0]
                         tool_name = action_data.get("tool")
                         parameters = action_data.get("parameters", {})
-                        
+
                         # Check if the tool is "done"
                         if tool_name == "done":
                             return AgentResponse(
                                 done=True,
                                 message=AgentMessage(
                                     message=parameters.get("message", "Task completed"),
-                                    thinking=content_json.get("thinking")
-                                )
+                                    thinking=content_json.get("thinking"),
+                                ),
                             )
-                        
+
                         # Create the action
-                        action = Action(
-                            tool=tool_name,
-                            parameters=parameters
-                        )
-                        
+                        action = Action(tool=tool_name, parameters=parameters)
+
                         # Store the remaining actions in the state for later processing
                         self.state.pending_actions = actions_data[1:]
-                        
+
                         # Create the message
                         message_obj = None
                         if "thinking" in content_json:
                             message_obj = AgentMessage(
-                                message="",
-                                thinking=content_json.get("thinking")
+                                message="", thinking=content_json.get("thinking")
                             )
-                        
-                        return AgentResponse(
-                            action=action,
-                            message=message_obj
-                        )
+
+                        return AgentResponse(action=action, message=message_obj)
             except json.JSONDecodeError:
                 # Not a valid JSON, treat as regular message
                 pass
-        
+
         # If there's no tool call, just return the message
         if content:
             return AgentResponse(
-                message=AgentMessage(
-                    message=content,
-                    thinking=response.get("thinking")
-                )
+                message=AgentMessage(message=content, thinking=response.get("thinking"))
             )
-        
+
         # If there's no content, return an empty response
-        return AgentResponse() 
+        return AgentResponse()
