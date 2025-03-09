@@ -47,7 +47,7 @@ def mock_browser():
 def mock_agent():
     """Create a mock agent instance."""
     agent = MagicMock(spec=Agent)
-    agent.achat = AsyncMock()
+    agent.chat_completion = MagicMock()
     return agent
 
 
@@ -208,16 +208,22 @@ async def test_execute_done_action(agent_loop):
 async def test_run_with_done_response(agent_loop, mock_agent):
     """Test running the agent loop with a done response."""
     # Mock the agent response
-    mock_agent.achat.return_value = {
-        "tool_calls": [
+    mock_agent.chat_completion.return_value = {
+        "choices": [
             {
-                "function": {
-                    "name": "done",
-                    "arguments": json.dumps({"message": "Task completed"})
+                "message": {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "done",
+                                "arguments": json.dumps({"message": "Task completed"})
+                            }
+                        }
+                    ],
+                    "content": "I've completed the task."
                 }
             }
-        ],
-        "content": "I've completed the task."
+        ]
     }
     
     # Run the agent loop
@@ -229,37 +235,49 @@ async def test_run_with_done_response(agent_loop, mock_agent):
     assert memory[0]["content"] == "Test task"
     
     # Check that the agent was called
-    mock_agent.achat.assert_called_once()
+    mock_agent.chat_completion.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_run_with_action_response(agent_loop, mock_agent):
     """Test running the agent loop with an action response."""
     # Mock the agent responses
-    mock_agent.achat.side_effect = [
+    mock_agent.chat_completion.side_effect = [
         # First response: goto action
         {
-            "tool_calls": [
+            "choices": [
                 {
-                    "function": {
-                        "name": "goto",
-                        "arguments": json.dumps({"url": "https://example.com"})
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "goto",
+                                    "arguments": json.dumps({"url": "https://example.com"})
+                                }
+                            }
+                        ],
+                        "content": "I'll navigate to example.com"
                     }
                 }
-            ],
-            "content": "I'll navigate to example.com"
+            ]
         },
         # Second response: done action
         {
-            "tool_calls": [
+            "choices": [
                 {
-                    "function": {
-                        "name": "done",
-                        "arguments": json.dumps({"message": "Task completed"})
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "done",
+                                    "arguments": json.dumps({"message": "Task completed"})
+                                }
+                            }
+                        ],
+                        "content": "I've completed the task."
                     }
                 }
-            ],
-            "content": "I've completed the task."
+            ]
         }
     ]
     
@@ -270,23 +288,29 @@ async def test_run_with_action_response(agent_loop, mock_agent):
     assert len(memory) > 0
     
     # Check that the agent was called twice
-    assert mock_agent.achat.call_count == 2
+    assert mock_agent.chat_completion.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_run_max_iterations(agent_loop, mock_agent):
     """Test running the agent loop with maximum iterations."""
     # Mock the agent response to always return an action
-    mock_agent.achat.return_value = {
-        "tool_calls": [
+    mock_agent.chat_completion.return_value = {
+        "choices": [
             {
-                "function": {
-                    "name": "goto",
-                    "arguments": json.dumps({"url": "https://example.com"})
+                "message": {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "goto",
+                                "arguments": json.dumps({"url": "https://example.com"})
+                            }
+                        }
+                    ],
+                    "content": "I'll navigate to example.com"
                 }
             }
-        ],
-        "content": "I'll navigate to example.com"
+        ]
     }
     
     # Set max iterations to 3
@@ -296,7 +320,7 @@ async def test_run_max_iterations(agent_loop, mock_agent):
     memory = await agent_loop.run("Go to example.com")
     
     # Check that the agent was called 3 times
-    assert mock_agent.achat.call_count == 3
+    assert mock_agent.chat_completion.call_count == 3
     
     # Check that the last message indicates max iterations reached
     assert memory[-1]["role"] == "system"
