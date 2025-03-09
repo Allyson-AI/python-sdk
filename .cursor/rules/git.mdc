@@ -1,0 +1,14 @@
+---
+description: Use with git commands
+globs: 
+alwaysApply: false
+---
+
+# Git Rules 
+Update these files accordingly make sure you add tags and update the changelog.
+
+Add High-quality Open Source Standard PR descriptions/commit messages that break down everything that you changed and updated.
+
+[setup.py](mdc:setup.py) 
+[README.md](mdc:README.md)
+[__init__.py](mdc:allyson/__init__.py)
