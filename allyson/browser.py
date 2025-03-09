@@ -32,6 +32,7 @@ class Browser:
         locale: Optional[str] = None,
         timeout: int = 30000,
         proxy: Optional[Dict[str, str]] = None,
+        executable_path: Optional[str] = None,
     ):
         """
         Initialize a new Browser instance.
@@ -45,6 +46,7 @@ class Browser:
             locale: Browser locale
             timeout: Default timeout for operations in milliseconds
             proxy: Proxy settings, e.g., {'server': 'http://myproxy.com:3128'}
+            executable_path: Path to browser executable (e.g., Chrome binary)
         """
         self.browser_type = browser_type
         self.headless = headless
@@ -54,6 +56,7 @@ class Browser:
         self.locale = locale
         self.timeout = timeout
         self.proxy = proxy
+        self.executable_path = executable_path
 
         self._playwright = None
         self._browser = None
@@ -81,51 +84,88 @@ class Browser:
         await self.aclose()
 
     def _launch_sync(self):
-        """Launch browser in synchronous mode."""
+        """Launch the browser in synchronous mode."""
         self._playwright = sync_playwright().start()
-        browser_type_obj = getattr(self._playwright, self.browser_type)
         
-        self._browser = browser_type_obj.launch(
-            headless=self.headless,
-            slow_mo=self.slow_mo,
-            proxy=self.proxy,
-        )
+        # Get the browser type
+        if self.browser_type == "chromium":
+            browser_type = self._playwright.chromium
+        elif self.browser_type == "firefox":
+            browser_type = self._playwright.firefox
+        elif self.browser_type == "webkit":
+            browser_type = self._playwright.webkit
+        else:
+            raise ValueError(f"Unsupported browser type: {self.browser_type}")
         
-        context_options = {
-            "viewport": self.viewport,
-            "locale": self.locale,
-            "user_agent": self.user_agent,
+        # Launch the browser
+        launch_options = {
+            "headless": self.headless,
+            "slow_mo": self.slow_mo,
         }
-        # Remove None values
-        context_options = {k: v for k, v in context_options.items() if v is not None}
         
+        # Add proxy if specified
+        if self.proxy:
+            launch_options["proxy"] = self.proxy
+            
+        # Add executable path if specified
+        if self.executable_path:
+            launch_options["executable_path"] = self.executable_path
+        
+        self._browser = browser_type.launch(**launch_options)
+        
+        # Create a new page
+        context_options = {}
+        if self.viewport:
+            context_options["viewport"] = self.viewport
+        if self.user_agent:
+            context_options["user_agent"] = self.user_agent
+        if self.locale:
+            context_options["locale"] = self.locale
+            
         self._context = self._browser.new_context(**context_options)
-        self._page = Page(self._context.new_page())
-        return self
+        self._page = Page(self._context.new_page(), is_async=False)
 
     async def _launch_async(self):
-        """Launch browser in asynchronous mode."""
+        """Launch the browser in asynchronous mode."""
         self._playwright = await async_playwright().start()
-        browser_type_obj = getattr(self._playwright, self.browser_type)
         
-        self._browser = await browser_type_obj.launch(
-            headless=self.headless,
-            slow_mo=self.slow_mo,
-            proxy=self.proxy,
-        )
+        # Get the browser type
+        if self.browser_type == "chromium":
+            browser_type = self._playwright.chromium
+        elif self.browser_type == "firefox":
+            browser_type = self._playwright.firefox
+        elif self.browser_type == "webkit":
+            browser_type = self._playwright.webkit
+        else:
+            raise ValueError(f"Unsupported browser type: {self.browser_type}")
         
-        context_options = {
-            "viewport": self.viewport,
-            "locale": self.locale,
-            "user_agent": self.user_agent,
+        # Launch the browser
+        launch_options = {
+            "headless": self.headless,
+            "slow_mo": self.slow_mo,
         }
-        # Remove None values
-        context_options = {k: v for k, v in context_options.items() if v is not None}
         
+        # Add proxy if specified
+        if self.proxy:
+            launch_options["proxy"] = self.proxy
+            
+        # Add executable path if specified
+        if self.executable_path:
+            launch_options["executable_path"] = self.executable_path
+        
+        self._browser = await browser_type.launch(**launch_options)
+        
+        # Create a new page
+        context_options = {}
+        if self.viewport:
+            context_options["viewport"] = self.viewport
+        if self.user_agent:
+            context_options["user_agent"] = self.user_agent
+        if self.locale:
+            context_options["locale"] = self.locale
+            
         self._context = await self._browser.new_context(**context_options)
-        page = await self._context.new_page()
-        self._page = Page(page, is_async=True)
-        return self
+        self._page = Page(await self._context.new_page(), is_async=True)
 
     def goto(self, url: str, wait_until: str = "load", timeout: Optional[int] = None):
         """

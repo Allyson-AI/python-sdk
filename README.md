@@ -31,7 +31,11 @@ from allyson import Browser, Agent, AgentLoop, Tool, ToolType
 
 async def automate_task():
     # Create a browser instance
-    async with Browser(headless=False) as browser:
+    async with Browser(
+        headless=False,
+        # Optional: Use your own Chrome installation instead of the default Chromium
+        executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    ) as browser:
         # Create an agent instance with your OpenAI API key
         agent = Agent(api_key="your-api-key")
         
@@ -73,6 +77,23 @@ async def automate_task():
 import asyncio
 asyncio.run(automate_task())
 ```
+
+### Using Your Own Chrome Installation
+
+By default, Allyson uses the Playwright-managed Chromium browser. However, for better stability and compatibility, you can use your own Chrome installation:
+
+```python
+# Windows
+browser = Browser(executable_path="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
+
+# macOS
+browser = Browser(executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+
+# Linux
+browser = Browser(executable_path="/usr/bin/google-chrome")
+```
+
+This is especially useful for automation tasks that require specific browser versions or configurations.
 
 ### Agent Loop Features
 
@@ -151,6 +172,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details. 
 
 ## Changelog
+- **0.1.6** - Added support for custom Chrome browser path
 - **0.1.5** - Added planner feature for creating and tracking task progress
 - **0.1.4** - Enhanced agent loop with action chaining, Enter key tool, and improved error handling
 - **0.1.3** - Added DOM extraction and screenshot annotation features
