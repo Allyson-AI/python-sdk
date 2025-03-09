@@ -2,11 +2,6 @@
 
 AI-powered web browser automation using Playwright.
 
-## Changelog
-
-- **0.1.1** - Test release for GitHub Actions automated publishing
-- **0.1.0** - Initial release
-
 ## Installation
 
 ```bash
@@ -107,3 +102,10 @@ Note: You need to set up a PyPI API token as a GitHub secret named `PYPI_API_TOK
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details. 
+
+
+## Changelog
+
+- **0.1.2** - Updated Description
+- **0.1.1** - Test release for GitHub Actions automated publishing
+- **0.1.0** - Initial release

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="allyson",
-    version="0.1.1",
+    version="0.1.2",
     packages=find_packages(),
     install_requires=[
         "playwright>=1.40.0",
@@ -27,7 +27,7 @@ setup(
     },
     author="Allyson Team",
     author_email="info@allyson.ai",
-    description="AI-powered web browser automation using Playwright",
+    description="AI-powered web browser automation",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/Allyson-AI/python-sdk",
