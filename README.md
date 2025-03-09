@@ -76,6 +76,29 @@ asyncio.run(run_automation())
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Automated Publishing
+
+This package uses GitHub Actions for automated testing and publishing to PyPI. The workflow is configured to:
+
+1. Run tests on every push to the main branch and on pull requests
+2. Build the package on every push to the main branch
+3. Publish to PyPI automatically when:
+   - A new tag is pushed with the format `v*` (e.g., v0.1.0, v1.0.0)
+   - A new GitHub Release is created
+
+To publish a new version:
+
+1. Update the version number in `setup.py`
+2. Commit and push your changes to the main branch
+3. Create and push a new tag:
+   ```bash
+   git tag v0.1.1
+   git push origin v0.1.1
+   ```
+4. The GitHub Action will automatically build and publish the package to PyPI
+
+Note: You need to set up a PyPI API token as a GitHub secret named `PYPI_API_TOKEN` for the automated publishing to work.
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details. 
