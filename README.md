@@ -2,6 +2,11 @@
 
 AI-powered web browser automation using Playwright.
 
+## Changelog
+
+- **0.1.1** - Test release for GitHub Actions automated publishing
+- **0.1.0** - Initial release
+
 ## Installation
 
 ```bash
