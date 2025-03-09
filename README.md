@@ -1,6 +1,6 @@
-# Allyson
+# Allyson Python SDK
 
-AI-powered web browser automation using Playwright.
+AI-powered web browser automation.
 
 ## Installation
 
@@ -21,6 +21,8 @@ python -m playwright install
 - Support for multiple browsers (Chromium, Firefox, WebKit)
 - Asynchronous and synchronous interfaces
 - Robust error handling and recovery
+- DOM extraction and analysis for AI integration
+- Screenshot annotation with element bounding boxes
 
 ## Quick Start
 
@@ -72,6 +74,48 @@ import asyncio
 asyncio.run(run_automation())
 ```
 
+## DOM Extraction and Screenshot Annotation
+
+```python
+from allyson import Browser, DOMExtractor
+
+async def extract_and_annotate():
+    async with Browser(headless=False) as browser:
+        # Navigate to a website
+        await browser.goto("https://example.com")
+        
+        # Create a DOM extractor
+        dom_extractor = DOMExtractor(browser._page)
+        
+        # Extract interactive elements
+        elements = await dom_extractor.extract_interactive_elements()
+        print(f"Found {len(elements)} interactive elements")
+        
+        # Take a screenshot with annotations
+        result = await dom_extractor.screenshot_with_annotations(
+            path="screenshot.png",
+            elements=elements,
+            show_element_ids=True,
+            box_color="red"
+        )
+        
+        print(f"Clean screenshot: {result['clean']}")
+        print(f"Annotated screenshot: {result['annotated']}")
+        
+        # Create an element map for AI analysis
+        map_result = await dom_extractor.screenshot_with_element_map(
+            path="element_map.png"
+        )
+        
+        # The element map contains detailed information about each element
+        for element in map_result["elementMap"]:
+            print(f"Element #{element['id']}: {element['elementType']}")
+
+# Run the async function
+import asyncio
+asyncio.run(extract_and_annotate())
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -105,7 +149,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 
 ## Changelog
-
+- **0.1.3** - Added DOM extraction and screenshot annotation features
 - **0.1.2** - Updated Description
 - **0.1.1** - Test release for GitHub Actions automated publishing
 - **0.1.0** - Initial release
