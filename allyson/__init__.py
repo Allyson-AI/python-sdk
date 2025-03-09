@@ -2,7 +2,7 @@
 Allyson: AI-powered web browser automation using Playwright.
 """
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 from allyson.browser import Browser
 from allyson.page import Page
