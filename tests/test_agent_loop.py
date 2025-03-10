@@ -355,7 +355,9 @@ async def test_run_with_done_response(agent_loop, mock_agent):
     # Check the memory
     assert len(memory) > 0
     assert memory[0]["role"] == "user"
-    assert memory[0]["content"] == "Test task"
+    assert "Previous History" in memory[0]["content"]
+    assert "Plan:" in memory[0]["content"]
+    assert "Task: Test task" in memory[0]["content"]
     
     # Check that the agent was called twice (once for plan, once for action)
     assert mock_agent.chat_completion.call_count == 2
