@@ -12,6 +12,8 @@ setup(
         "pytest-asyncio>=0.21.0",
         "pillow>=10.0.0",
         "playwright-stealth>=1.0.6",
+        "tenacity>=8.0.0",
+        "bs4>=0.0.1",
     ],
     extras_require={
         "dev": [
