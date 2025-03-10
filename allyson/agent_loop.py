@@ -539,12 +539,21 @@ class AgentLoop:
         if self.verbose:
             logger.info("Creating plan for task")
 
+        # Get current page information
+        current_url = self.state.current_url or "unknown page"
+        page_title = self.state.page_title or "unknown title"
+
         # Create a system message for the planner
         system_message = f"""
 You are an expert strategic planner specializing in web automation and information retrieval tasks.
 
 ## YOUR OBJECTIVE
 Create a comprehensive, structured plan that breaks down the given task into logical steps and substeps.
+
+## CURRENT CONTEXT
+- You are already on a page with URL: {current_url}
+- The current page title is: {page_title}
+- Your plan should start from this current page, not from a blank state
 
 ## PLAN REQUIREMENTS
 Your plan must:
@@ -554,6 +563,7 @@ Your plan must:
 4. Anticipate potential challenges and decision points
 5. Be formatted as a Markdown checklist with proper hierarchy
 6. Consider the maximum step limit of {self.max_steps} while ensuring task completion
+7. DO NOT include steps to navigate to the current page as you are already there
 
 ## PLAN STRUCTURE
 ```markdown
@@ -581,7 +591,6 @@ Your plan must:
   - Synthesizing a comprehensive summary
 
 - **Navigation Planning**: Include explicit steps for:
-  - Initial navigation to appropriate starting points
   - Moving between different sites or sections as needed
   - Returning to previous pages when necessary
 
@@ -799,11 +808,11 @@ Return ONLY the updated Markdown plan with the appropriate step(s) marked as com
         if self.verbose:
             logger.info(f"Starting agent loop for task: {task}")
 
+        # Update state to get current page information before creating the plan
+        await self._update_state()
+
         # Create a plan for the task
         plan_markdown = await self._create_plan(task)
-
-        # Update state to get screenshot
-        await self._update_state()
 
         # Add the task and plan to the memory
         self.state.memory.append({
@@ -1048,6 +1057,10 @@ Return ONLY the updated Markdown plan with the appropriate step(s) marked as com
         # Get current date and time
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+        # Get current page information
+        current_url = self.state.current_url or "unknown page"
+        page_title = self.state.page_title or "unknown title"
+
         # Create the system message
         system_message = f"""
 You are an advanced AI navigator designed to accomplish web browsing tasks with precision and intelligence.
@@ -1056,6 +1069,8 @@ You are an advanced AI navigator designed to accomplish web browsing tasks with 
 - Current date and time: {current_time}
 - Maximum steps available: {self.max_steps}
 - You are currently on step: {self.state.memory.count({"role": "system", "content": lambda x: x.startswith("Current step:")}) + 1 if self.state.memory else 1}
+- Current page URL: {current_url}
+- Current page title: {page_title}
 
 ## AVAILABLE TOOLS
 {json.dumps(tools_schema, indent=2)}

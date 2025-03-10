@@ -36,8 +36,8 @@ async def run_agent_loop():
     Run the agent loop to automate a web browsing task.
     
     This example demonstrates:
-    1. Creating a plan for the task
-    2. Navigating to Google
+    1. Starting directly on Google
+    2. Creating a plan for the task
     3. Searching for a topic using action chaining (type + enter)
     4. Finding information from the search results
     5. Tracking progress using the plan
@@ -67,6 +67,10 @@ async def run_agent_loop():
         headless=False,
         executable_path=chrome_path  # Pass the Chrome executable path
     ) as browser:
+        # Navigate to Google first
+        await browser.agoto("https://www.google.com")
+        print("Navigated to Google")
+        
         # Create an agent instance
         agent = Agent(api_key=api_key)
         
@@ -101,7 +105,8 @@ async def run_agent_loop():
         )
         
         # Run the agent loop with a task that demonstrates planning and action chaining
-        task = "Go to Google, search for 'Elon Musk', and find information about his companies"
+        # Note: We're already on Google, so we skip that step in the task description
+        task = "Search for 'Elon Musk', and find information about his companies"
         
         print(f"Running task: {task}")
         memory = await agent_loop.run(task)
