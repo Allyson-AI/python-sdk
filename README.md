@@ -134,7 +134,11 @@ The agent loop provides several powerful features for automating web tasks:
 
 1. **Natural Language Instructions**: Describe tasks in plain English, and Allyson will figure out how to accomplish them.
 
-2. **Task Planning**: Allyson automatically creates a step-by-step plan for completing the task and tracks progress by marking steps as completed.
+2. **Structured Task Planning**: Allyson automatically creates a step-by-step plan for completing the task and tracks progress by marking steps as completed. The enhanced planner:
+   - Maintains a structured representation of the plan with steps and substeps
+   - Automatically tracks the current step and progresses to the next step
+   - Uses intelligent matching to find and update the right steps
+   - Provides consistent formatting and organization of plans
 
 3. **Built-in Tools**:
    - `goto`: Navigate to a URL
@@ -205,6 +209,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details. 
 
 ## Changelog
+- **0.1.8** - Enhanced structured planner with improved step tracking and management
 - **0.1.7** - Added advanced anti-detection features with comprehensive bot detection bypass
 - **0.1.6** - Added support for custom Chrome browser path
 - **0.1.5** - Added planner feature for creating and tracking task progress

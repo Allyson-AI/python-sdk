@@ -8,16 +8,21 @@ and executes the resulting actions on a web page.
 import asyncio
 import json
 import logging
-import time
 import os
+import re
+import time
+import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union, Callable, Type
 
 import pydantic
 from pydantic import BaseModel, Field, create_model
 
-from allyson import Browser, DOMExtractor, Agent
+from allyson.agent import Agent
 from allyson.tools import Tool, ToolType, get_default_tools
+from allyson.browser import Browser
+from allyson import DOMExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,233 @@ class Observation(BaseModel):
     error: Optional[str] = None
 
 
+class PlanStep(BaseModel):
+    """A step in the plan."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])  # Unique identifier for the step
+    description: str
+    completed: bool = False
+    parent_id: Optional[str] = None  # ID of parent step if this is a substep
+    substeps: List["PlanStep"] = Field(default_factory=list)
+    completion_time: Optional[datetime] = None  # When the step was completed
+
+
+PlanStep.update_forward_refs()
+
+
+class Plan(BaseModel):
+    """A plan for completing a task."""
+
+    task: str
+    steps: List[PlanStep] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_updated: datetime = Field(default_factory=datetime.now)
+    current_step_id: Optional[str] = None  # Track the current step being worked on
+    completed_steps: List[str] = Field(default_factory=list)  # List of completed step IDs
+    
+    def get_step_by_id(self, step_id: str) -> Optional[PlanStep]:
+        """Find a step by its ID."""
+        for step in self.steps:
+            if step.id == step_id:
+                return step
+            if step.substeps:
+                for substep in step.substeps:
+                    if substep.id == step_id:
+                        return substep
+        return None
+    
+    def get_next_incomplete_step(self) -> Optional[PlanStep]:
+        """Get the next incomplete step in the plan."""
+        for step in self.steps:
+            if not step.completed:
+                return step
+            if step.substeps:
+                for substep in step.substeps:
+                    if not substep.completed:
+                        return substep
+        return None
+    
+    def mark_step_complete(self, step_id: str) -> bool:
+        """Mark a step as complete by its ID."""
+        step = self.get_step_by_id(step_id)
+        if step:
+            step.completed = True
+            step.completion_time = datetime.now()
+            self.completed_steps.append(step_id)
+            self.last_updated = datetime.now()
+            return True
+        return False
+    
+    def to_markdown(self) -> str:
+        """Convert the plan to markdown format."""
+        lines = [f"# Plan for: {self.task}\n", "## Steps:"]
+        
+        for step in self.steps:
+            checkbox = "[x]" if step.completed else "[ ]"
+            lines.append(f"- {checkbox} {step.description}")
+            
+            if step.substeps:
+                for substep in step.substeps:
+                    checkbox = "[x]" if substep.completed else "[ ]"
+                    lines.append(f"  - {checkbox} {substep.description}")
+        
+        return "\n".join(lines)
+    
+    @classmethod
+    def from_markdown(cls, markdown: str) -> "Plan":
+        """
+        Parse a markdown plan into a structured Plan object.
+        
+        Args:
+            markdown: Markdown string containing the plan
+            
+        Returns:
+            Plan object
+        """
+        lines = markdown.strip().split("\n")
+        
+        # Extract task from the title
+        task = ""
+        for line in lines:
+            if line.startswith("# Plan for:"):
+                task = line.replace("# Plan for:", "").strip()
+                break
+        
+        plan = cls(task=task)
+        
+        # Parse steps and substeps
+        current_step = None
+        for line in lines:
+            # Skip empty lines and headers
+            if not line or line.startswith("#"):
+                continue
+                
+            # Check if it's a step or substep
+            if line.startswith("- "):
+                # It's a main step
+                step_text = line[2:].strip()
+                completed = False
+                
+                # Check if it's completed
+                if step_text.startswith("[x]"):
+                    completed = True
+                    step_text = step_text[3:].strip()
+                elif step_text.startswith("[ ]"):
+                    step_text = step_text[3:].strip()
+                
+                # Create the step
+                current_step = PlanStep(
+                    description=step_text,
+                    completed=completed
+                )
+                
+                # Add to the plan
+                plan.steps.append(current_step)
+                
+                # If completed, add to completed steps
+                if completed:
+                    plan.completed_steps.append(current_step.id)
+                
+            elif line.lstrip().startswith("- ") and current_step and line.startswith("  "):
+                # It's a substep (indented with spaces)
+                substep_text = line.lstrip()[2:].strip()
+                completed = False
+                
+                # Check if it's completed
+                if substep_text.startswith("[x]"):
+                    completed = True
+                    substep_text = substep_text[3:].strip()
+                elif substep_text.startswith("[ ]"):
+                    substep_text = substep_text[3:].strip()
+                
+                # Create the substep
+                substep = PlanStep(
+                    description=substep_text,
+                    completed=completed,
+                    parent_id=current_step.id
+                )
+                
+                # Add to the current step
+                current_step.substeps.append(substep)
+                
+                # If completed, add to completed steps
+                if completed:
+                    plan.completed_steps.append(substep.id)
+        
+        # Set the current step to the first incomplete step
+        next_step = plan.get_next_incomplete_step()
+        if next_step:
+            plan.current_step_id = next_step.id
+            
+        return plan
+    
+    def find_step_by_description(self, description: str) -> Optional[PlanStep]:
+        """
+        Find a step by its description (or partial match).
+        
+        Args:
+            description: Description to match
+            
+        Returns:
+            Matching PlanStep or None
+        """
+        # First try exact match
+        for step in self.steps:
+            if step.description.lower() == description.lower():
+                return step
+            
+            for substep in step.substeps:
+                if substep.description.lower() == description.lower():
+                    return substep
+        
+        # Then try partial match
+        best_match = None
+        best_score = 0
+        
+        for step in self.steps:
+            score = self._similarity_score(step.description.lower(), description.lower())
+            if score > best_score:
+                best_match = step
+                best_score = score
+            
+            for substep in step.substeps:
+                score = self._similarity_score(substep.description.lower(), description.lower())
+                if score > best_score:
+                    best_match = substep
+                    best_score = score
+        
+        # Only return if we have a reasonable match
+        if best_score > 0.5:
+            return best_match
+            
+        return None
+    
+    def _similarity_score(self, text1: str, text2: str) -> float:
+        """
+        Calculate a simple similarity score between two strings.
+        
+        Args:
+            text1: First string
+            text2: Second string
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
+        # Check if one is a substring of the other
+        if text1 in text2 or text2 in text1:
+            return 0.8
+            
+        # Count matching words
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+        
+        if not words1 or not words2:
+            return 0
+            
+        common_words = words1.intersection(words2)
+        return len(common_words) / max(len(words1), len(words2))
+
+
 class AgentState(BaseModel):
     """State of the agent during execution."""
 
@@ -57,6 +289,7 @@ class AgentState(BaseModel):
     pending_actions: Optional[List[Dict[str, Any]]] = None
     plan: Optional[str] = None
     plan_path: Optional[str] = None
+    structured_plan: Optional[Plan] = None
     # Token tracking
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
@@ -77,21 +310,6 @@ class AgentResponse(BaseModel):
     action: Optional[Action] = None
     message: Optional[AgentMessage] = None
     done: bool = False
-
-
-class PlanStep(BaseModel):
-    """A step in the plan."""
-
-    description: str
-    completed: bool = False
-    substeps: Optional[List["PlanStep"]] = None
-
-
-class Plan(BaseModel):
-    """A plan for completing a task."""
-
-    task: str
-    steps: List[PlanStep] = Field(default_factory=list)
 
 
 class AgentLoop:
@@ -385,6 +603,12 @@ Now, create a plan for the following task: {task}
 
         # Extract the plan from the response
         plan_markdown = response["choices"][0]["message"]["content"]
+        
+        # Parse the markdown into a structured Plan object
+        plan = Plan.from_markdown(plan_markdown)
+        
+        # Convert back to markdown to ensure consistent formatting
+        plan_markdown = plan.to_markdown()
 
         # Save the plan to a file if a plan directory is specified
         if self.plan_dir:
@@ -399,6 +623,9 @@ Now, create a plan for the following task: {task}
 
         # Store the plan in the state
         self.state.plan = plan_markdown
+        
+        # Also store the structured plan object in the state
+        self.state.structured_plan = plan
 
         return plan_markdown
 
@@ -417,7 +644,37 @@ Now, create a plan for the following task: {task}
 
         if self.verbose:
             logger.info(f"Updating plan: marking step as completed: {completed_step}")
-
+            
+        # If we have a structured plan, use it to update the plan
+        if hasattr(self.state, 'structured_plan') and self.state.structured_plan:
+            plan = self.state.structured_plan
+            
+            # Find the step that matches the completed step description
+            step = plan.find_step_by_description(completed_step)
+            
+            if step:
+                # Mark the step as completed
+                plan.mark_step_complete(step.id)
+                
+                # Update the current step to the next incomplete step
+                next_step = plan.get_next_incomplete_step()
+                if next_step:
+                    plan.current_step_id = next_step.id
+                
+                # Convert the updated plan to markdown
+                updated_plan = plan.to_markdown()
+                
+                # Save the updated plan to the file if a plan path exists
+                if self.state.plan_path:
+                    with open(self.state.plan_path, "w") as f:
+                        f.write(updated_plan)
+                
+                # Update the plan in the state
+                self.state.plan = updated_plan
+                
+                return updated_plan
+        
+        # Fallback to the old method if we don't have a structured plan or couldn't find the step
         # Create a system message for the plan updater
         system_message = """
 You are a planning assistant that helps update a task plan by marking steps as completed.
@@ -444,6 +701,12 @@ Return the entire updated plan in Markdown format.
 
         # Extract the updated plan from the response
         updated_plan = response["choices"][0]["message"]["content"]
+        
+        # Parse the updated plan into a structured Plan object
+        plan = Plan.from_markdown(updated_plan)
+        
+        # Store the structured plan in the state
+        self.state.structured_plan = plan
 
         # Save the updated plan to the file if a plan path exists
         if self.state.plan_path:
@@ -457,10 +720,10 @@ Return the entire updated plan in Markdown format.
 
     async def run(self, task: str) -> List[Dict[str, Any]]:
         """
-        Run the agent loop to complete a task.
+        Run the agent loop for a given task.
 
         Args:
-            task: Task to complete
+            task: Task to run the agent for
 
         Returns:
             Memory of the conversation (for backward compatibility)
@@ -468,22 +731,47 @@ Return the entire updated plan in Markdown format.
         """
         # Reset the state
         self.state = AgentState()
-
-        # Add the user message to the memory
-        self.state.memory.append({"role": "user", "content": task})
+        
+        if self.verbose:
+            logger.info(f"Starting agent loop for task: {task}")
 
         # Create a plan for the task
-        if self.plan_dir:
-            self.state.plan = await self._create_plan(task)
+        plan_markdown = await self._create_plan(task)
 
-        # Run the loop
-        step = 0
-        while step < self.max_steps:
-            step += 1
+        # Add the task and plan to the memory
+        self.state.memory.append({
+            "role": "user",
+            "content": task
+        })
+        self.state.memory.append({
+            "role": "system",
+            "content": f"I've created a plan to help accomplish this task:\n\n{plan_markdown}"
+        })
+
+        # Run the agent loop
+        step_count = 0
+        while step_count < self.max_steps:
+            step_count += 1
             if self.verbose:
-                logger.info(f"Step {step}/{self.max_steps}")
+                logger.info(f"Step {step_count}/{self.max_steps}")
 
-            # Get the agent response
+            # Get the next step from the plan if available
+            current_step = None
+            if hasattr(self.state, 'structured_plan') and self.state.structured_plan:
+                plan = self.state.structured_plan
+                current_step = plan.get_next_incomplete_step()
+                
+                if current_step:
+                    # Update the current step ID
+                    plan.current_step_id = current_step.id
+                    
+                    # Add a message about the current step
+                    self.state.memory.append({
+                        "role": "system",
+                        "content": f"Current step: {current_step.description}"
+                    })
+
+            # Get the agent's response
             agent_response = await self._get_agent_response()
 
             # Check if the agent is done
@@ -519,7 +807,7 @@ Return the entire updated plan in Markdown format.
                             "tool": action.tool,
                             "parameters": action.parameters
                         },
-                        "thinking": agent_response.thinking
+                        "thinking": agent_response.message.thinking if agent_response.message else None
                     })
                 })
                 self.state.memory.append({
@@ -534,18 +822,50 @@ Return the entire updated plan in Markdown format.
                 })
 
                 # Update the plan if needed
-                if self.plan_dir and self.state.plan:
+                if self.state.plan:
+                    # Create a description of the action for updating the plan
                     action_str = f"{action.tool}: {json.dumps(action.parameters)}"
+                    
+                    # If we have a current step, use its description instead
+                    if current_step:
+                        action_str = current_step.description
+                    
+                    # Update the plan
                     self.state.plan = await self._update_plan(action_str)
+                    
+                    # If the action was successful, mark the current step as completed
+                    if observation.status == ActionStatus.SUCCESS and current_step:
+                        if hasattr(self.state, 'structured_plan') and self.state.structured_plan:
+                            plan = self.state.structured_plan
+                            plan.mark_step_complete(current_step.id)
+                            
+                            # Get the next step
+                            next_step = plan.get_next_incomplete_step()
+                            if next_step:
+                                plan.current_step_id = next_step.id
+                                
+                                # Add a message about the next step
+                                self.state.memory.append({
+                                    "role": "system",
+                                    "content": f"Next step: {next_step.description}"
+                                })
 
                 # Check if the agent is done
                 if action.tool == "done":
                     if self.verbose:
                         logger.info("Agent is done (done action)")
                     break
+                
+                if observation.status == ActionStatus.ERROR:
+                    if self.verbose:
+                        logger.error(f"Error executing action: {observation.error}")
+                    self.state.memory.append({
+                        "role": "system",
+                        "content": f"Error executing action: {observation.error}"
+                    })
 
         # Check if we reached the maximum number of steps
-        if step >= self.max_steps:
+        if step_count >= self.max_steps:
             # Add a message to the memory
             self.state.memory.append({
                 "role": "system",
@@ -553,6 +873,9 @@ Return the entire updated plan in Markdown format.
             })
             if self.verbose:
                 logger.warning(f"Reached maximum number of steps ({self.max_steps})")
+        else:
+            if self.verbose:
+                logger.info(f"Agent loop completed in {step_count} steps")
 
         # Return the memory for backward compatibility
         return self.state.memory
@@ -629,145 +952,93 @@ Return the entire updated plan in Markdown format.
         Returns:
             System message
         """
+        # Get the tools schema
+        tools_schema = self.get_tools_schema()
+
         # Create the system message
-        system_message = """
-You are an AI assistant that helps users automate web browsing tasks. You are given a task to complete, and you can use a set of tools to interact with the web page.
+        system_message = f"""
+You are an AI assistant that can browse the web and perform actions on behalf of the user.
 
-Your goal is to complete the task by using the available tools. You should think step by step and explain your reasoning.
+You have access to the following tools:
+{json.dumps(tools_schema, indent=2)}
 
-The current state of the web page is provided to you, including:
-- The current URL
-- The page title
-- Interactive elements on the page (with their IDs, types, and text content)
-
-Each interactive element has an ID number that you can use to interact with it. The IDs start at 1.
-
-Available tools:
-- goto: Navigate to a URL
-- click: Click on an element by its ID number
-- type: Type text into an element by its ID number
-- enter: Press the Enter key to submit a form or activate the default action
-- scroll: Scroll the page in a direction
-- done: Mark the task as complete with a final message
-
-You can use these tools in two ways:
-
-1. Single action: Respond with a single tool call and its parameters.
+To use a tool, respond with a JSON object that includes an "action" object with "tool" and "parameters" fields.
+For example:
 ```json
-{
-  "action": {
-    "tool": "click",
-    "parameters": {
-      "element_id": 3
-    }
-  },
-  "thinking": "I need to click on the search button which is element ID 3."
-}
+{{
+  "action": {{
+    "tool": "browse",
+    "parameters": {{
+      "url": "https://www.google.com"
+    }}
+  }},
+  "thinking": "I need to navigate to Google to search for information."
+}}
 ```
 
-2. Multiple actions: Chain multiple actions together to be executed in sequence.
-```json
-{
-  "actions": [
-    {
-      "tool": "type",
-      "parameters": {
-        "element_id": 2,
-        "text": "search query"
-      }
-    },
-    {
-      "tool": "enter",
-      "parameters": {}
-    }
-  ],
-  "thinking": "I'll type the search query and press Enter to submit it."
-}
+The "thinking" field is optional but recommended to explain your reasoning.
+
+If you want to respond directly to the user without using a tool, just provide a regular message.
+For example:
+```
+I found the information you were looking for. According to the website, the capital of France is Paris.
 ```
 
-When you want to provide a message to the user without using a tool, respond with just your message.
-
-When you have completed the task, use the "done" tool with a message explaining what you did.
-
-Remember to:
-1. Analyze the page state carefully
-2. Choose the appropriate tool for each step
-3. Provide clear explanations of your actions
-4. Complete the task efficiently
-5. Chain actions together when it makes sense to do so
-6. Follow the plan provided to you
+When you're done with the task, use the "done" tool to indicate completion.
 """
 
-        # Add the plan if available
-        if self.state.plan:
-            system_message += (
-                f"\n\nHere is the plan for completing this task:\n\n{self.state.plan}\n"
-            )
-            system_message += "\nFollow this plan to complete the task. Mark steps as completed as you go."
+        # Add information about the current state
+        if self.state.current_url:
+            system_message += f"\n\nCurrent URL: {self.state.current_url}"
+        if self.state.page_title:
+            system_message += f"\nPage title: {self.state.page_title}"
 
-        # Add the current state
-        state_info = f"""
-Current state:
-- URL: {self.state.current_url}
-- Title: {self.state.page_title}
-- Interactive elements:
-"""
+        # Add information about the plan if available
+        if hasattr(self.state, 'structured_plan') and self.state.structured_plan:
+            plan = self.state.structured_plan
+            
+            # Add the plan
+            system_message += f"\n\nTask Plan:\n{plan.to_markdown()}"
+            
+            # Add information about the current step
+            if plan.current_step_id:
+                current_step = plan.get_step_by_id(plan.current_step_id)
+                if current_step:
+                    system_message += f"\n\nCurrent Step: {current_step.description}"
+                    
+                    # If there are substeps, add them
+                    if current_step.substeps:
+                        system_message += "\nSubsteps:"
+                        for substep in current_step.substeps:
+                            checkbox = "[x]" if substep.completed else "[ ]"
+                            system_message += f"\n  - {checkbox} {substep.description}"
+            
+            # Add information about the next step
+            next_step = plan.get_next_incomplete_step()
+            if next_step:
+                system_message += f"\n\nNext Step: {next_step.description}"
+        elif self.state.plan:
+            system_message += f"\n\nTask Plan:\n{self.state.plan}"
 
-        # Add the interactive elements
+        # Add information about interactive elements if available
         if self.state.interactive_elements:
-            for i, element in enumerate(self.state.interactive_elements, 1):
-                element_type = element.get("elementType", "unknown")
-                text = element.get("textContent", "").strip()
-                text = text[:50] + "..." if len(text) > 50 else text
-                state_info += f"  {i}. {element_type}: {text}\n"
-        else:
-            state_info += "  No interactive elements found\n"
+            system_message += "\n\nInteractive elements on the page:"
+            for i, element in enumerate(self.state.interactive_elements):
+                description = element.get('description', element.get('textContent', 'Unknown element'))
+                element_type = element.get('type', element.get('elementType', 'unknown'))
+                system_message += f"\n{i+1}. {description} (type: {element_type})"
 
-        # Add the screenshot path if available
+        # Add information about the screenshot if available
         if self.state.screenshot_path:
-            state_info += f"\nA screenshot of the page with annotated elements is available at: {self.state.screenshot_path}\n"
+            system_message += f"\n\nA screenshot of the current page is available at: {self.state.screenshot_path}"
 
-        # Add the action history
-        if len(self.state.memory) > 1:  # Skip the initial user message
-            action_history = "\nAction history:\n"
+        # Add information about pending actions if available
+        if self.state.pending_actions and len(self.state.pending_actions) > 0:
+            system_message += "\n\nPending actions:"
+            for i, action in enumerate(self.state.pending_actions):
+                system_message += f"\n{i+1}. {json.dumps(action)}"
 
-            for i, message in enumerate(self.state.memory[1:], 1):
-                role = message.get("role", "")
-                content = message.get("content", "")
-
-                if role == "assistant" and content and content.startswith("{"):
-                    try:
-                        data = json.loads(content)
-                        if "action" in data:
-                            action = data["action"]
-                            tool = action.get("tool", "unknown")
-                            params = action.get("parameters", {})
-                            action_history += (
-                                f"  {i}. Used tool: {tool} with parameters: {params}\n"
-                            )
-                    except:
-                        pass
-                elif role == "system" and content and content.startswith("{"):
-                    try:
-                        data = json.loads(content)
-                        if "observation" in data:
-                            observation = data["observation"]
-                            status = observation.get("status", "unknown")
-                            data_result = observation.get("data", {})
-                            error = observation.get("error")
-
-                            if status == "success":
-                                action_history += (
-                                    f"  {i}. Result: Success - {data_result}\n"
-                                )
-                            else:
-                                action_history += f"  {i}. Result: Error - {error}\n"
-                    except:
-                        pass
-
-            state_info += action_history
-
-        return system_message + state_info
+        return system_message
 
     def _parse_agent_response(self, response: Dict[str, Any]) -> AgentResponse:
         """
