@@ -57,6 +57,11 @@ class AgentState(BaseModel):
     pending_actions: Optional[List[Dict[str, Any]]] = None
     plan: Optional[str] = None
     plan_path: Optional[str] = None
+    # Token tracking
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    token_usage_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentMessage(BaseModel):
@@ -198,33 +203,70 @@ class AgentLoop:
 
     async def _update_state(self):
         """Update the agent state with the current page state."""
-        # Get the current URL and title
-        self.state.current_url = await self.browser._page.aevaluate(
-            "window.location.href"
-        )
-        self.state.page_title = await self.browser._page.aevaluate("document.title")
+        try:
+            # Get the current URL and title
+            self.state.current_url = await self.browser._page.aevaluate(
+                "window.location.href"
+            )
+            self.state.page_title = await self.browser._page.aevaluate("document.title")
 
-        # Extract interactive elements
-        dom_extractor = self.browser._dom_extractor
-        self.state.interactive_elements = (
-            await dom_extractor.extract_interactive_elements()
-        )
-
-        # Take a screenshot
-        if self.screenshot_dir:
-            timestamp = int(time.time())
-            screenshot_path = os.path.join(
-                self.screenshot_dir, f"screenshot_{timestamp}.png"
+            # Extract interactive elements
+            dom_extractor = self.browser._dom_extractor
+            self.state.interactive_elements = (
+                await dom_extractor.extract_interactive_elements()
             )
 
-            # Take a screenshot with annotations
-            result = await dom_extractor.screenshot_with_annotations(
-                path=screenshot_path,
-                elements=self.state.interactive_elements,
-                show_element_ids=True,
-            )
+            # Take a screenshot
+            if self.screenshot_dir:
+                timestamp = int(time.time())
+                screenshot_path = os.path.join(
+                    self.screenshot_dir, f"screenshot_{timestamp}.png"
+                )
 
-            self.state.screenshot_path = result["annotated"]
+                # Take a screenshot with annotations
+                result = await dom_extractor.screenshot_with_annotations(
+                    path=screenshot_path,
+                    elements=self.state.interactive_elements,
+                    show_element_ids=True,
+                )
+
+                self.state.screenshot_path = result["annotated"]
+        except Exception as e:
+            # Handle navigation-related errors gracefully
+            logger.warning(f"Error updating state, likely due to navigation: {e}")
+            # Wait a moment for the page to stabilize after navigation
+            await asyncio.sleep(0.5)
+            # Try again with a simplified approach
+            try:
+                self.state.current_url = await self.browser._page.aurl()
+                self.state.page_title = await self.browser._page.atitle()
+                
+                # Extract interactive elements
+                dom_extractor = self.browser._dom_extractor
+                self.state.interactive_elements = (
+                    await dom_extractor.extract_interactive_elements()
+                )
+                
+                # Take a screenshot
+                if self.screenshot_dir:
+                    timestamp = int(time.time())
+                    screenshot_path = os.path.join(
+                        self.screenshot_dir, f"screenshot_{timestamp}.png"
+                    )
+                    
+                    # Take a screenshot with annotations
+                    result = await dom_extractor.screenshot_with_annotations(
+                        path=screenshot_path,
+                        elements=self.state.interactive_elements,
+                        show_element_ids=True,
+                    )
+                    
+                    self.state.screenshot_path = result["annotated"]
+            except Exception as e2:
+                logger.error(f"Failed to update state even after retry: {e2}")
+                # Set minimal state information
+                self.state.current_url = "unknown (navigation in progress)"
+                self.state.page_title = "unknown (navigation in progress)"
 
     async def _execute_action(self, action: Action) -> Observation:
         """
@@ -415,240 +457,117 @@ Return the entire updated plan in Markdown format.
 
     async def run(self, task: str) -> List[Dict[str, Any]]:
         """
-        Run the agent loop with a task.
+        Run the agent loop to complete a task.
 
         Args:
-            task: Task to run
+            task: Task to complete
 
         Returns:
-            Memory of the agent loop
+            Memory of the conversation (for backward compatibility)
+            To get token usage, use get_token_usage() method
         """
-        # Initialize the state
+        # Reset the state
         self.state = AgentState()
 
-        # Add the task to the memory
+        # Add the user message to the memory
         self.state.memory.append({"role": "user", "content": task})
 
         # Create a plan for the task
-        plan = await self._create_plan(task)
-
-        # Add the plan to the memory
-        self.state.memory.append(
-            {
-                "role": "system",
-                "content": f"Here is the plan for completing this task:\n\n{plan}",
-            }
-        )
-
-        # Update the state
-        await self._update_state()
+        if self.plan_dir:
+            self.state.plan = await self._create_plan(task)
 
         # Run the loop
         step = 0
-        done = False
-
-        while step < self.max_steps and not done:
+        while step < self.max_steps:
             step += 1
-
             if self.verbose:
                 logger.info(f"Step {step}/{self.max_steps}")
 
-            # Check if there are pending actions
-            if hasattr(self.state, "pending_actions") and self.state.pending_actions:
-                # Get the next action from pending actions
-                action_data = self.state.pending_actions.pop(0)
-                tool_name = action_data.get("tool")
-                parameters = action_data.get("parameters", {})
+            # Get the agent response
+            agent_response = await self._get_agent_response()
 
-                # Check if the action is "done"
-                if tool_name == "done":
-                    if self.verbose:
-                        logger.info(
-                            f"Task is done from pending action: {parameters.get('message', 'No message')}"
-                        )
+            # Check if the agent is done
+            if agent_response.done:
+                if self.verbose:
+                    logger.info("Agent is done")
+                break
 
-                    # Add the observation to the memory
-                    self.state.memory.append(
-                        {
-                            "role": "system",
-                            "content": json.dumps(
-                                {
-                                    "observation": {
-                                        "status": ActionStatus.SUCCESS,
-                                        "data": {
-                                            "done": True,
-                                            "message": parameters.get(
-                                                "message", "Task completed"
-                                            ),
-                                        },
-                                        "error": None,
-                                    }
-                                }
-                            ),
-                        }
-                    )
+            # Check if the agent wants to send a message
+            if agent_response.message:
+                if self.verbose:
+                    logger.info(f"Agent message: {agent_response.message.message}")
+                self.state.memory.append({
+                    "role": "assistant",
+                    "content": agent_response.message.message
+                })
+                continue
 
-                    done = True
-                    continue
-
-                # Create the action
-                action = Action(tool=tool_name, parameters=parameters)
-
-                # Add the action to the memory
-                self.state.memory.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            {
-                                "action": {
-                                    "tool": action.tool,
-                                    "parameters": action.parameters,
-                                },
-                                "thinking": "Executing pending action",
-                            }
-                        ),
-                    }
-                )
+            # Check if the agent wants to execute an action
+            if agent_response.action:
+                action = agent_response.action
+                if self.verbose:
+                    logger.info(f"Executing action: {action.tool} with parameters {action.parameters}")
 
                 # Execute the action
                 observation = await self._execute_action(action)
 
-                # Add the observation to the memory
-                self.state.memory.append(
-                    {
-                        "role": "system",
-                        "content": json.dumps(
-                            {
-                                "observation": {
-                                    "status": observation.status,
-                                    "data": observation.data,
-                                    "error": observation.error,
-                                }
-                            }
-                        ),
-                    }
-                )
-
-                # Update the last observation
-                self.state.last_observation = observation
-
-                # Continue to the next iteration
-                continue
-
-            # Get the agent response
-            response = await self._get_agent_response()
-
-            # Check if the agent is done
-            if response.done:
-                if self.verbose:
-                    logger.info(
-                        f"Agent is done: {response.message.message if response.message else 'No message'}"
-                    )
-
-                # Add the message to the memory
-                if response.message:
-                    self.state.memory.append(
-                        {"role": "assistant", "content": response.message.message}
-                    )
-
-                done = True
-                continue
-
-            # Execute the action
-            if response.action:
-                if self.verbose:
-                    logger.info(
-                        f"Executing action: {response.action.tool} with parameters {response.action.parameters}"
-                    )
-
-                # Add the action to the memory
-                action_content = {
-                    "action": {
-                        "tool": response.action.tool,
-                        "parameters": response.action.parameters,
-                    }
-                }
-
-                if response.message and response.message.thinking:
-                    action_content["thinking"] = response.message.thinking
-
-                self.state.memory.append(
-                    {"role": "assistant", "content": json.dumps(action_content)}
-                )
-
-                # Execute the action
-                observation = await self._execute_action(response.action)
-
-                # Check if the task is done
-                if response.action.tool == "done":
-                    if self.verbose:
-                        logger.info(
-                            f"Task is done: {observation.data.get('message', 'No message')}"
-                        )
-
-                    # Add the observation to the memory
-                    self.state.memory.append(
-                        {
-                            "role": "system",
-                            "content": json.dumps(
-                                {
-                                    "observation": {
-                                        "status": observation.status,
-                                        "data": observation.data,
-                                        "error": observation.error,
-                                    }
-                                }
-                            ),
+                # Add the action and observation to the memory
+                self.state.memory.append({
+                    "role": "assistant",
+                    "content": json.dumps({
+                        "action": {
+                            "tool": action.tool,
+                            "parameters": action.parameters
+                        },
+                        "thinking": agent_response.thinking
+                    })
+                })
+                self.state.memory.append({
+                    "role": "system",
+                    "content": json.dumps({
+                        "observation": {
+                            "status": observation.status,
+                            "data": observation.data,
+                            "error": observation.error
                         }
-                    )
+                    })
+                })
 
-                    done = True
-                    continue
+                # Update the plan if needed
+                if self.plan_dir and self.state.plan:
+                    action_str = f"{action.tool}: {json.dumps(action.parameters)}"
+                    self.state.plan = await self._update_plan(action_str)
 
-                # Add the observation to the memory
-                self.state.memory.append(
-                    {
-                        "role": "system",
-                        "content": json.dumps(
-                            {
-                                "observation": {
-                                    "status": observation.status,
-                                    "data": observation.data,
-                                    "error": observation.error,
-                                }
-                            }
-                        ),
-                    }
-                )
-
-                # Update the last observation
-                self.state.last_observation = observation
-
-                # Update the plan with the completed action
-                action_description = (
-                    f"{response.action.tool}: {json.dumps(response.action.parameters)}"
-                )
-                await self._update_plan(action_description)
-
-            # Add the message to the memory if there is one
-            if response.message and not response.action:
-                self.state.memory.append(
-                    {"role": "assistant", "content": response.message.message}
-                )
+                # Check if the agent is done
+                if action.tool == "done":
+                    if self.verbose:
+                        logger.info("Agent is done (done action)")
+                    break
 
         # Check if we reached the maximum number of steps
-        if step >= self.max_steps and not done:
-            logger.warning(f"Reached maximum number of steps ({self.max_steps})")
-
+        if step >= self.max_steps:
             # Add a message to the memory
-            self.state.memory.append(
-                {
-                    "role": "system",
-                    "content": f"Reached maximum number of steps ({self.max_steps})",
-                }
-            )
+            self.state.memory.append({
+                "role": "system",
+                "content": f"Reached maximum number of steps ({self.max_steps})"
+            })
+            if self.verbose:
+                logger.warning(f"Reached maximum number of steps ({self.max_steps})")
 
+        # Return the memory for backward compatibility
         return self.state.memory
+        
+    def get_result(self) -> Dict[str, Any]:
+        """
+        Get the complete result including memory and token usage.
+        
+        Returns:
+            Dictionary containing the memory and token usage
+        """
+        return {
+            "memory": self.state.memory,
+            "token_usage": self.get_token_usage()
+        }
 
     async def _get_agent_response(self) -> AgentResponse:
         """
@@ -672,6 +591,33 @@ Return the entire updated plan in Markdown format.
         # Debug log the response
         if self.verbose:
             logger.info(f"Agent response: {json.dumps(response, indent=2)}")
+            
+        # Track token usage
+        if "usage" in response:
+            usage = response["usage"]
+            # Update token counts
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", 0)
+            
+            # Add to totals
+            self.state.total_prompt_tokens += prompt_tokens
+            self.state.total_completion_tokens += completion_tokens
+            self.state.total_tokens += total_tokens
+            
+            # Add to history with timestamp
+            self.state.token_usage_history.append({
+                "timestamp": time.time(),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "model": response.get("model", self.agent.model),
+                "step": len(self.state.memory) // 2  # Approximate step number
+            })
+            
+            if self.verbose:
+                logger.info(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
+                logger.info(f"Cumulative tokens - Prompt: {self.state.total_prompt_tokens}, Completion: {self.state.total_completion_tokens}, Total: {self.state.total_tokens}")
 
         # Parse the response
         return self._parse_agent_response(response)
@@ -958,3 +904,48 @@ Current state:
 
         # If there's no content, return an empty response
         return AgentResponse()
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """
+        Get token usage statistics.
+        
+        Returns:
+            Dictionary with token usage statistics
+        """
+        return {
+            "prompt_tokens": self.state.total_prompt_tokens,
+            "completion_tokens": self.state.total_completion_tokens,
+            "total_tokens": self.state.total_tokens,
+            "history": self.state.token_usage_history,
+            "estimated_cost": {
+                # Approximate costs based on OpenAI's pricing (as of 2024)
+                # These are estimates and may not be accurate
+                "gpt-4o": {
+                    "prompt": round(self.state.total_prompt_tokens * 0.00001, 6),  # $0.01 per 1K tokens
+                    "completion": round(self.state.total_completion_tokens * 0.00003, 6),  # $0.03 per 1K tokens
+                    "total": round(
+                        (self.state.total_prompt_tokens * 0.00001) + 
+                        (self.state.total_completion_tokens * 0.00003), 
+                        6
+                    )
+                },
+                "gpt-4": {
+                    "prompt": round(self.state.total_prompt_tokens * 0.00003, 6),  # $0.03 per 1K tokens
+                    "completion": round(self.state.total_completion_tokens * 0.00006, 6),  # $0.06 per 1K tokens
+                    "total": round(
+                        (self.state.total_prompt_tokens * 0.00003) + 
+                        (self.state.total_completion_tokens * 0.00006), 
+                        6
+                    )
+                },
+                "gpt-3.5-turbo": {
+                    "prompt": round(self.state.total_prompt_tokens * 0.000001, 6),  # $0.001 per 1K tokens
+                    "completion": round(self.state.total_completion_tokens * 0.000002, 6),  # $0.002 per 1K tokens
+                    "total": round(
+                        (self.state.total_prompt_tokens * 0.000001) + 
+                        (self.state.total_completion_tokens * 0.000002), 
+                        6
+                    )
+                }
+            }
+        }

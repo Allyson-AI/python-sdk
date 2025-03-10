@@ -360,10 +360,68 @@ class Page:
             
         await self._page.wait_for_load_state(state, **options)
 
-    def get_url(self):
-        """Get the current URL of the page."""
+    def url(self) -> str:
+        """
+        Get the current URL of the page.
+        
+        Returns:
+            Current URL
+        """
+        if self._is_async:
+            raise RuntimeError("Use 'await page.aurl()' in async mode")
+            
         return self._page.url
 
-    def get_title(self):
-        """Get the current title of the page."""
-        return self._page.title() 
+    async def aurl(self) -> str:
+        """
+        Get the current URL of the page (async version).
+        
+        Returns:
+            Current URL
+        """
+        if not self._is_async:
+            raise RuntimeError("Use 'page.url()' in sync mode")
+            
+        return self._page.url
+
+    def title(self) -> str:
+        """
+        Get the current title of the page.
+        
+        Returns:
+            Current title
+        """
+        if self._is_async:
+            raise RuntimeError("Use 'await page.atitle()' in async mode")
+            
+        return self._page.title()
+
+    async def atitle(self) -> str:
+        """
+        Get the current title of the page (async version).
+        
+        Returns:
+            Current title
+        """
+        if not self._is_async:
+            raise RuntimeError("Use 'page.title()' in sync mode")
+            
+        return await self._page.title()
+
+    def __getattr__(self, name):
+        """
+        Delegate method calls to the underlying page object.
+        
+        Args:
+            name: Name of the attribute to get
+            
+        Returns:
+            The attribute from the underlying page object
+        """
+        # Handle backward compatibility for renamed methods
+        if name == "get_title":
+            return self.title
+        elif name == "get_url":
+            return self.url
+            
+        return getattr(self._page, name) 

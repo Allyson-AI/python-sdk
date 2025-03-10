@@ -15,6 +15,8 @@ from allyson.stealth import (
     apply_stealth_sync,
     apply_stealth_async,
     get_anti_detection_args,
+    get_browser_args,
+    DEFAULT_VIEWPORT,
     CHROME_USER_AGENT
 )
 
@@ -57,7 +59,7 @@ class Browser:
         self.browser_type = browser_type
         self.headless = headless
         self.slow_mo = slow_mo
-        self.viewport = viewport or {"width": 1280, "height": 720}
+        self.viewport = viewport or DEFAULT_VIEWPORT
         self.user_agent = user_agent or CHROME_USER_AGENT
         self.locale = locale
         self.timeout = timeout
@@ -103,10 +105,11 @@ class Browser:
         else:
             raise ValueError(f"Unsupported browser type: {self.browser_type}")
         
-        # Launch the browser
+        # Launch the browser with anti-detection arguments
         launch_options = {
             "headless": self.headless,
             "slow_mo": self.slow_mo,
+            "args": get_browser_args(),
         }
         
         # Add proxy if specified
@@ -122,10 +125,13 @@ class Browser:
         # Create a new page with anti-detection settings
         context_options = {}
         
-        # Apply anti-detection settings (always enabled)
+        # Get base anti-detection settings
         anti_detection_args = get_anti_detection_args()
-        # Override viewport size in anti-detection args
+        
+        # Always use the user-defined viewport
         anti_detection_args["viewport"] = self.viewport
+        
+        # Apply anti-detection settings
         context_options.update(anti_detection_args)
             
         # Override with user-provided settings if specified
@@ -158,10 +164,11 @@ class Browser:
         else:
             raise ValueError(f"Unsupported browser type: {self.browser_type}")
         
-        # Launch the browser
+        # Launch the browser with anti-detection arguments
         launch_options = {
             "headless": self.headless,
             "slow_mo": self.slow_mo,
+            "args": get_browser_args(),
         }
         
         # Add proxy if specified
@@ -177,10 +184,13 @@ class Browser:
         # Create a new page with anti-detection settings
         context_options = {}
         
-        # Apply anti-detection settings (always enabled)
+        # Get base anti-detection settings
         anti_detection_args = get_anti_detection_args()
-        # Override viewport size in anti-detection args
+        
+        # Always use the user-defined viewport
         anti_detection_args["viewport"] = self.viewport
+        
+        # Apply anti-detection settings
         context_options.update(anti_detection_args)
             
         # Override with user-provided settings if specified
@@ -288,6 +298,12 @@ class Browser:
         """Delegate method calls to the page object."""
         if self._page is None:
             raise RuntimeError("Browser not initialized. Use with 'with' statement or call launch() first.")
+        
+        # Handle backward compatibility for renamed methods
+        if name == "get_title":
+            return self._page.title
+        elif name == "get_url":
+            return self._page.url
         
         attr = getattr(self._page, name)
         return attr 

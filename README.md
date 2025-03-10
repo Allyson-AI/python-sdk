@@ -24,7 +24,7 @@ python -m playwright install
 - DOM extraction and analysis for AI integration
 - Screenshot annotation with element bounding boxes
 - Agent loop for automating tasks with natural language
-- Built-in anti-detection features to avoid bot detection
+- Advanced anti-detection features to bypass bot detection
 
 ## Quick Start
 ```python
@@ -35,7 +35,9 @@ async def automate_task():
     async with Browser(
         headless=False,
         # Optional: Use your own Chrome installation instead of the default Chromium
-        executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        # Optional: Customize viewport size (default is 1280x720)
+        viewport={"width": 1366, "height": 768}
     ) as browser:
         # Create an agent instance with your OpenAI API key
         agent = Agent(api_key="your-api-key")
@@ -96,26 +98,43 @@ browser = Browser(executable_path="/usr/bin/google-chrome")
 
 This is especially useful for automation tasks that require specific browser versions or configurations.
 
-### Built-in Anti-Detection Features
+### Advanced Anti-Detection Features
 
-Allyson includes built-in anti-detection features to help avoid bot detection systems. These features are always enabled and require no configuration:
+Allyson includes comprehensive anti-detection features to bypass bot detection systems. These features are always enabled and require no configuration:
 
 The anti-detection features include:
 
 1. **Playwright Stealth**: Automatically applies various techniques to make the browser appear more like a regular user browser.
-2. **Realistic User Agent**: Uses a modern Chrome user agent string.
-3. **Standard Viewport**: Sets a common desktop resolution (1280x720).
-4. **Browser Fingerprint Protection**: Modifies browser properties that are commonly used for fingerprinting.
 
-These features help avoid detection when automating websites that have anti-bot measures, making your automation more reliable.
+2. **Browser Launch Arguments**: Uses special browser arguments to disable automation flags:
+   - Disables automation-controlled features
+   - Disables infobars and notifications
+   - Prevents automation detection
+   - Handles security certificates automatically
+
+3. **JavaScript Evasion**: Injects custom JavaScript to override browser properties commonly used for bot detection:
+   - Sets `navigator.webdriver` to false
+   - Modifies browser plugins and features
+   - Handles permission queries naturally
+
+4. **Customizable Viewport**: You can specify your preferred viewport size (default is 1280x720):
+   ```python
+   browser = Browser(viewport={"width": 1366, "height": 768})
+   ```
+
+5. **Realistic User Agent**: Uses a modern Chrome user agent string.
+
+6. **Browser Fingerprint Protection**: Modifies browser properties that are commonly used for fingerprinting.
+
+These features help bypass detection on websites with sophisticated anti-bot measures, making your automation more reliable and less likely to be blocked.
 
 ### Agent Loop Features
 
 The agent loop provides several powerful features for automating web tasks:
 
-1. **Natural Language Instructions**: Describe tasks in plain English, and the agent will figure out how to accomplish them.
+1. **Natural Language Instructions**: Describe tasks in plain English, and Allyson will figure out how to accomplish them.
 
-2. **Task Planning**: The agent automatically creates a step-by-step plan for completing the task and tracks progress by marking steps as completed.
+2. **Task Planning**: Allyson automatically creates a step-by-step plan for completing the task and tracks progress by marking steps as completed.
 
 3. **Built-in Tools**:
    - `goto`: Navigate to a URL
@@ -125,10 +144,10 @@ The agent loop provides several powerful features for automating web tasks:
    - `scroll`: Scroll the page in any direction
    - `done`: Mark the task as complete
 
-4. **Action Chaining**: The agent can chain multiple actions together for efficiency:
+4. **Action Chaining**: Allyson can chain multiple actions together for efficiency:
 
 ```python
-# The agent can chain actions like typing and pressing Enter
+# Allyson can chain actions like typing and pressing Enter
 {
   "actions": [
     {
@@ -146,17 +165,17 @@ The agent loop provides several powerful features for automating web tasks:
 }
 ```
 
-5. **Custom Tools**: Add your own tools to extend the agent's capabilities.
+5. **Custom Tools**: Add your own tools to extend Allyson's capabilities.
 
-6. **Memory and Context**: The agent maintains a memory of all actions and observations, providing context for decision-making.
+6. **Memory and Context**: Allyson maintains a memory of all actions and observations, providing context for decision-making.
 
-7. **Error Handling**: The agent can recover from errors and try alternative approaches.
+7. **Error Handling**: Allyson can recover from errors and try alternative approaches.
 
 8. **Screenshot Annotations**: Automatically take screenshots with annotated elements for better visibility.
 
 ### Example Plan
 
-The agent creates a Markdown plan like this for each task:
+Allyson creates a Markdown plan like this for each task:
 
 ```markdown
 # Plan for: Search for information about Python programming language
@@ -186,7 +205,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details. 
 
 ## Changelog
-- **0.1.7** - Added built-in anti-detection features with playwright-stealth integration
+- **0.1.7** - Added advanced anti-detection features with comprehensive bot detection bypass
 - **0.1.6** - Added support for custom Chrome browser path
 - **0.1.5** - Added planner feature for creating and tracking task progress
 - **0.1.4** - Enhanced agent loop with action chaining, Enter key tool, and improved error handling
