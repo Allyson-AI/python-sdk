@@ -20,10 +20,19 @@ import base64
 import pydantic
 from pydantic import BaseModel, Field, create_model
 
+from bs4 import BeautifulSoup
+from tenacity import retry, stop_after_attempt, wait_fixed
+
 from allyson.agent import Agent
 from allyson.tools import Tool, ToolType, get_default_tools
 from allyson.browser import Browser
 from allyson import DOMExtractor
+from allyson.prompts import (
+    get_agent_system_prompt,
+    get_planner_system_prompt,
+    get_plan_updater_system_prompt,
+    build_context_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -507,12 +516,20 @@ class AgentLoop:
         tool = self.tools[action.tool]
 
         try:
+            # Add more detailed logging for scroll actions
+            if action.tool == "scroll" and self.verbose:
+                logger.info(f"Executing scroll action with parameters: {action.parameters}")
+            
             # Execute the tool function with the parameters
             result = tool.function(**action.parameters)
 
             # If the result is a coroutine, await it
             if asyncio.iscoroutine(result):
                 result = await result
+                
+            # Add more detailed logging for scroll results
+            if action.tool == "scroll" and self.verbose:
+                logger.info(f"Scroll result: {result}")
 
             # Check if the task is done
             if action.tool == "done":
@@ -544,107 +561,7 @@ class AgentLoop:
         page_title = self.state.page_title or "unknown title"
 
         # Create a system message for the planner
-        system_message = f"""
-You are an expert strategic planner specializing in web automation and information retrieval tasks.
-
-## YOUR OBJECTIVE
-Create a comprehensive, structured plan that breaks down the given task into logical steps and substeps.
-
-## CURRENT CONTEXT
-- You are already on a page with URL: {current_url}
-- The current page title is: {page_title}
-- Your plan should start from this current page, not from a blank state
-
-## PLAN REQUIREMENTS
-Your plan must:
-1. Be thorough yet concise - identify all necessary steps without excessive detail
-2. Focus on strategic milestones rather than mechanical actions
-3. Include appropriate substeps for complex operations
-4. Anticipate potential challenges and decision points
-5. Be formatted as a Markdown checklist with proper hierarchy
-6. Consider the maximum step limit of {self.max_steps} while ensuring task completion
-7. DO NOT include steps to navigate to the current page as you are already there
-
-## PLAN STRUCTURE
-```markdown
-# Plan for: [Task Description]
-
-## Steps:
-- [ ] Major Step 1
-  - [ ] Substep 1.1 (if needed)
-  - [ ] Substep 1.2 (if needed)
-- [ ] Major Step 2
-  - [ ] Substep 2.1 (if needed)
-...and so on
-```
-
-## PLANNING CONSIDERATIONS
-- **Task Complexity Analysis**: Assess whether this is a simple, moderate, or complex task
-  - Simple tasks (10 steps or less): Direct, straightforward operations (e.g., "Search for X")
-  - Moderate tasks (10-20 steps): Multi-stage operations with clear progression
-  - Complex tasks (30+ steps): Tasks requiring research, comparison, or multiple sources
-
-- **Information Gathering**: For research tasks, include steps for:
-  - Identifying authoritative sources
-  - Cross-referencing information
-  - Organizing findings by relevance or category
-  - Synthesizing a comprehensive summary
-
-- **Navigation Planning**: Include explicit steps for:
-  - Moving between different sites or sections as needed
-  - Returning to previous pages when necessary
-
-- **Contingency Planning**: Consider alternative paths when:
-  - Information might not be available at the first source
-  - User authentication might be required
-  - Search results might need refinement
-
-- **Verification Steps**: For critical information, include steps to:
-  - Confirm data accuracy across multiple sources
-  - Validate that all requested information has been gathered
-
-## EXAMPLES OF EFFECTIVE PLANS
-
-### Simple Task Example:
-Task: Check the weather in New York
-```markdown
-# Plan for: Check the weather in New York
-
-## Steps:
-- [ ] Navigate to a weather service website
-- [ ] Search for "New York weather"
-- [ ] Extract current weather conditions and forecast
-- [ ] Summarize the weather information
-```
-
-### Complex Task Example:
-Task: Research and compare features of the top 3 electric vehicles
-```markdown
-# Plan for: Research and compare features of the top 3 electric vehicles
-
-## Steps:
-- [ ] Identify authoritative sources for EV information
-  - [ ] Find automotive review websites
-  - [ ] Locate manufacturer websites
-- [ ] Determine the current top 3 electric vehicles by sales or ratings
-- [ ] Research each vehicle individually
-  - [ ] Gather specifications (range, charging time, price)
-  - [ ] Collect performance data
-  - [ ] Find safety ratings
-  - [ ] Note unique features
-- [ ] Create a comparative analysis
-  - [ ] Organize data in a structured format
-  - [ ] Highlight key differences
-  - [ ] Note pros and cons of each vehicle
-- [ ] Summarize findings with recommendations based on different priorities
-  - [ ] Best value option
-  - [ ] Best performance option
-  - [ ] Best overall option
-```
-
-Now, analyze the following task and create an appropriate plan:
-{task}
-"""
+        system_message = get_planner_system_prompt(current_url, page_title, self.max_steps)
 
         # Create the messages for the agent
         messages = [
@@ -730,35 +647,7 @@ Now, analyze the following task and create an appropriate plan:
         
         # Fallback to the old method if we don't have a structured plan or couldn't find the step
         # Create a system message for the plan updater
-        system_message = """
-You are an expert plan tracker responsible for maintaining accurate progress records for complex tasks.
-
-## YOUR OBJECTIVE
-Update the provided Markdown plan by identifying and marking completed steps based on the action description.
-
-## TASK REQUIREMENTS
-1. Analyze the completed action description carefully
-2. Find the step in the plan that best matches this action
-3. Mark ONLY that step as completed by changing "[ ]" to "[x]"
-4. Maintain the exact structure and formatting of the original plan
-5. Return the complete updated plan in Markdown format
-
-## MATCHING GUIDELINES
-- **Exact Matches**: If the action description exactly matches a step, mark that step
-- **Partial Matches**: If no exact match exists, use semantic understanding to find the closest step
-- **Context Awareness**: Consider the logical progression of the plan when choosing between multiple potential matches
-- **Hierarchical Awareness**: If a substep is completed but its parent step still has incomplete substeps, only mark the substep as completed
-- **Completion Logic**: If all substeps of a parent step are completed, also mark the parent step as completed
-
-## IMPORTANT CONSIDERATIONS
-- Never add new steps or modify existing step descriptions
-- Never mark multiple steps as completed unless they are directly related (parent/child)
-- Preserve all formatting, indentation, and structure of the original plan
-- If truly no matching step exists, return the plan unchanged with an explanation
-
-## RESPONSE FORMAT
-Return ONLY the updated Markdown plan with the appropriate step(s) marked as completed.
-"""
+        system_message = get_plan_updater_system_prompt()
 
         # Create the messages for the agent
         messages = [
@@ -1060,177 +949,22 @@ Return ONLY the updated Markdown plan with the appropriate step(s) marked as com
         # Get current page information
         current_url = self.state.current_url or "unknown page"
         page_title = self.state.page_title or "unknown title"
+        
+        # Get current step number
+        current_step = self.state.memory.count({"role": "system", "content": lambda x: x.startswith("Current step:")}) + 1 if self.state.memory else 1
 
         # Create the system message
-        system_message = f"""
-You are an advanced AI navigator designed to accomplish web browsing tasks with precision and intelligence.
+        system_message = get_agent_system_prompt(
+            current_time=current_time,
+            max_steps=self.max_steps,
+            current_step=current_step,
+            current_url=current_url,
+            page_title=page_title,
+            tools_schema=tools_schema
+        )
 
-## TASK CONTEXT
-- Current date and time: {current_time}
-- Maximum steps available: {self.max_steps}
-- You are currently on step: {self.state.memory.count({"role": "system", "content": lambda x: x.startswith("Current step:")}) + 1 if self.state.memory else 1}
-- Current page URL: {current_url}
-- Current page title: {page_title}
-
-## AVAILABLE TOOLS
-{json.dumps(tools_schema, indent=2)}
-
-## RESPONSE FORMAT
-You must respond using function calling with the following format:
-
-1. For executing actions:
-```json
-{{
-  "action": {{
-    "tool": "tool_name",
-    "parameters": {{
-      "param1": "value1",
-      "param2": "value2"
-    }}
-  }},
-  "thinking": "Your detailed reasoning process explaining why you're taking this action and how it contributes to the overall task"
-}}
-```
-
-2. For direct responses to the user:
-Simply provide your message as regular text without any special formatting.
-
-3. For task completion:
-```json
-{{
-  "action": {{
-    "tool": "done",
-    "parameters": {{
-      "message": "Comprehensive summary of what you accomplished and all information gathered"
-    }}
-  }}
-}}
-```
-
-## STRATEGIC GUIDELINES
-1. **Task Analysis**
-   - Break down complex tasks into logical steps
-   - Maintain awareness of your progress through the task plan
-   - Adapt your approach based on what you observe on each page
-
-2. **Navigation Strategy**
-   - Use precise element selection based on context and relevance
-   - Handle unexpected situations (popups, login prompts, etc.) gracefully
-   - If you encounter errors, try alternative approaches
-
-3. **Information Gathering**
-   - Extract relevant information completely and accurately
-   - Organize information in a structured, readable format
-   - Verify critical information when possible
-
-4. **Memory Management**
-   - Keep track of important information across multiple pages
-   - Remember your progress on multi-step tasks
-   - Count items when processing multiple similar elements (e.g., "3 of 10 items processed")
-
-5. **Efficiency Considerations**
-   - Chain related actions when appropriate (e.g., fill multiple form fields)
-   - Minimize unnecessary page loads and navigation
-   - Use scrolling to find elements before assuming they don't exist
-
-## COMPLETION CRITERIA
-- Only mark the task as complete when ALL requested information or actions are finished
-- If you reach the maximum step limit, use the "done" tool with a summary of progress so far
-- Include ALL gathered information in your final summary
-
-Remember: You are the user's expert navigator. Think step-by-step, be thorough, and explain your reasoning clearly.
-"""
-
-        # Add information about the current state
-        if self.state.current_url:
-            system_message += f"\n\n## CURRENT CONTEXT\nURL: {self.state.current_url}"
-        if self.state.page_title:
-            system_message += f"\nPage title: {self.state.page_title}"
-
-        # Add information about the plan if available
-        if hasattr(self.state, 'structured_plan') and self.state.structured_plan:
-            plan = self.state.structured_plan
-            
-            # Add the plan
-            system_message += f"\n\n## TASK PLAN\n{plan.to_markdown()}"
-            
-            # Add information about the current step
-            if plan.current_step_id:
-                current_step = plan.get_step_by_id(plan.current_step_id)
-                if current_step:
-                    system_message += f"\n\n## CURRENT FOCUS\nActive Step: {current_step.description}"
-                    
-                    # Calculate progress percentage
-                    total_steps = len(plan.steps)
-                    completed_steps = len(plan.completed_steps)
-                    progress_percentage = int((completed_steps / total_steps) * 100) if total_steps > 0 else 0
-                    
-                    system_message += f"\nProgress: {progress_percentage}% ({completed_steps}/{total_steps} steps completed)"
-                    
-                    # If there are substeps, add them
-                    if current_step.substeps:
-                        system_message += "\nRequired Substeps:"
-                        for substep in current_step.substeps:
-                            checkbox = "[x]" if substep.completed else "[ ]"
-                            system_message += f"\n  - {checkbox} {substep.description}"
-            
-            # Add information about the next step
-            next_step = plan.get_next_incomplete_step()
-            if next_step:
-                system_message += f"\n\nNext Step: {next_step.description}"
-                
-                # Add potential challenges for this step if applicable
-                if "search" in next_step.description.lower():
-                    system_message += "\nPotential challenges: Results may vary, be prepared to refine search terms"
-                elif "login" in next_step.description.lower():
-                    system_message += "\nPotential challenges: May encounter CAPTCHA or verification steps"
-                elif "extract" in next_step.description.lower():
-                    system_message += "\nPotential challenges: Content may be paginated or dynamically loaded"
-        elif self.state.plan:
-            system_message += f"\n\n## TASK PLAN\n{self.state.plan}"
-
-        # Add information about interactive elements if available
-        if self.state.interactive_elements:
-            system_message += "\n\n## INTERACTIVE ELEMENTS\nAvailable elements on the current page:"
-            for i, element in enumerate(self.state.interactive_elements):
-                description = element.get('description', element.get('textContent', 'Unknown element'))
-                element_type = element.get('type', element.get('elementType', 'unknown'))
-                system_message += f"\n[{i+1}] {description} (type: {element_type})"
-            
-            system_message += "\n\nNote: Use the numeric index in [] to interact with elements"
-
-        # Add information about the screenshot if available
-        if self.state.screenshot_path:
-            system_message += f"\n\n## VISUAL INFORMATION\nA screenshot of the current webpage is included with the user message."
-            system_message += "\nThe screenshot shows numbered red boxes around interactive elements."
-            system_message += "\nUse these numbers when referring to elements in your actions (e.g., click element #3)."
-
-        # Add information about pending actions if available
-        if self.state.pending_actions and len(self.state.pending_actions) > 0:
-            system_message += "\n\n## PENDING ACTIONS\nActions queued for execution:"
-            for i, action in enumerate(self.state.pending_actions):
-                system_message += f"\n{i+1}. {json.dumps(action)}"
-
-        # Add memory context if available
-        if self.state.memory and len(self.state.memory) > 2:  # Skip the initial user message and plan
-            # Extract the last few messages for context
-            recent_messages = self.state.memory[-5:] if len(self.state.memory) > 5 else self.state.memory
-            
-            system_message += "\n\n## RECENT ACTIVITY"
-            for msg in recent_messages:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                
-                # Truncate long content
-                if len(content) > 200:
-                    content = content[:197] + "..."
-                
-                if role == "user":
-                    system_message += f"\nUser: {content}"
-                elif role == "assistant" and content and not content.startswith("{"):
-                    system_message += f"\nYou: {content}"
-                elif role == "system" and "step" in content.lower():
-                    system_message += f"\nSystem: {content}"
+        # Add context sections
+        system_message += build_context_sections(self.state)
 
         return system_message
 
@@ -1391,24 +1125,6 @@ Remember: You are the user's expert navigator. Think step-by-step, be thorough, 
                     "total": round(
                         (self.state.total_prompt_tokens * 0.00001) + 
                         (self.state.total_completion_tokens * 0.00003), 
-                        6
-                    )
-                },
-                "gpt-4": {
-                    "prompt": round(self.state.total_prompt_tokens * 0.00003, 6),  # $0.03 per 1K tokens
-                    "completion": round(self.state.total_completion_tokens * 0.00006, 6),  # $0.06 per 1K tokens
-                    "total": round(
-                        (self.state.total_prompt_tokens * 0.00003) + 
-                        (self.state.total_completion_tokens * 0.00006), 
-                        6
-                    )
-                },
-                "gpt-3.5-turbo": {
-                    "prompt": round(self.state.total_prompt_tokens * 0.000001, 6),  # $0.001 per 1K tokens
-                    "completion": round(self.state.total_completion_tokens * 0.000002, 6),  # $0.002 per 1K tokens
-                    "total": round(
-                        (self.state.total_prompt_tokens * 0.000001) + 
-                        (self.state.total_completion_tokens * 0.000002), 
                         6
                     )
                 }

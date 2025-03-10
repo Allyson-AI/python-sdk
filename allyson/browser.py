@@ -306,4 +306,140 @@ class Browser:
             return self._page.url
         
         attr = getattr(self._page, name)
-        return attr 
+        return attr
+        
+    async def scroll_page(self, direction: str, distance: int = 300) -> Dict[str, Any]:
+        """
+        Scroll the page in the specified direction.
+        
+        Args:
+            direction: Direction to scroll ('up', 'down', 'left', 'right')
+            distance: Distance to scroll in pixels
+            
+        Returns:
+            Dictionary with scroll information
+        """
+        if self._page is None:
+            raise RuntimeError("Browser not initialized. Use with 'with' statement or call launch() first.")
+            
+        # Get the viewport size to calculate the center point
+        viewport_size = await self._page.aevaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
+        center_x = viewport_size["width"] // 2
+        center_y = viewport_size["height"] // 2
+        
+        # Get initial scroll position
+        initial_position = await self._page.aevaluate("() => ({ x: window.pageXOffset, y: window.pageYOffset })")
+        
+        # Try multiple scrolling methods
+        try:
+            # Method 1: Using scrollBy
+            if direction == "up":
+                await self._page.aevaluate(f"() => window.scrollBy(0, -{distance})")
+            elif direction == "down":
+                await self._page.aevaluate(f"() => window.scrollBy(0, {distance})")
+            elif direction == "left":
+                await self._page.aevaluate(f"() => window.scrollBy(-{distance}, 0)")
+            elif direction == "right":
+                await self._page.aevaluate(f"() => window.scrollBy({distance}, 0)")
+                
+            # Wait a bit for the scroll to take effect
+            await self._page.await_timeout(50)
+            
+            # Method 2: Using scrollTo with current position
+            if direction == "up":
+                await self._page.aevaluate(f"() => window.scrollTo(window.pageXOffset, window.pageYOffset - {distance})")
+            elif direction == "down":
+                await self._page.aevaluate(f"() => window.scrollTo(window.pageXOffset, window.pageYOffset + {distance})")
+            elif direction == "left":
+                await self._page.aevaluate(f"() => window.scrollTo(window.pageXOffset - {distance}, window.pageYOffset)")
+            elif direction == "right":
+                await self._page.aevaluate(f"() => window.scrollTo(window.pageXOffset + {distance}, window.pageYOffset)")
+                
+            # Wait a bit for the scroll to take effect
+            await self._page.await_timeout(50)
+            
+            # Method 3: Using mouse wheel
+            await self._page.amouse.move(center_x, center_y)
+            if direction == "up":
+                await self._page.amouse.wheel(0, -distance)
+            elif direction == "down":
+                await self._page.amouse.wheel(0, distance)
+            elif direction == "left":
+                await self._page.amouse.wheel(-distance, 0)
+            elif direction == "right":
+                await self._page.amouse.wheel(distance, 0)
+                
+            # Wait for the scroll to complete
+            await self._page.await_timeout(100)
+            
+            # Get final scroll position
+            final_position = await self._page.aevaluate("() => ({ x: window.pageXOffset, y: window.pageYOffset })")
+            
+            # Calculate the actual distance scrolled
+            if direction in ["up", "down"]:
+                actual_distance = final_position["y"] - initial_position["y"]
+            else:
+                actual_distance = final_position["x"] - initial_position["x"]
+                
+            return {
+                "direction": direction,
+                "requested_distance": distance,
+                "actual_distance": actual_distance,
+                "initial_position": initial_position,
+                "final_position": final_position,
+                "success": True
+            }
+            
+        except Exception as e:
+            return {
+                "direction": direction,
+                "requested_distance": distance,
+                "error": str(e),
+                "success": False
+            }
+
+    async def simple_scroll(self, direction: str, distance: int = 300) -> Dict[str, Any]:
+        """
+        A simpler scroll method that uses a more direct approach.
+        
+        Args:
+            direction: Direction to scroll ('up', 'down', 'left', 'right')
+            distance: Distance to scroll in pixels
+            
+        Returns:
+            Dictionary with scroll information
+        """
+        if self._page is None:
+            raise RuntimeError("Browser not initialized. Use with 'with' statement or call launch() first.")
+        
+        try:
+            # Use a simple script approach
+            script = ""
+            if direction == "up":
+                script = f"window.scrollBy(0, -{distance});"
+            elif direction == "down":
+                script = f"window.scrollBy(0, {distance});"
+            elif direction == "left":
+                script = f"window.scrollBy(-{distance}, 0);"
+            elif direction == "right":
+                script = f"window.scrollBy({distance}, 0);"
+                
+            # Execute the script directly
+            await self._page.evaluate(script)
+            
+            # Wait for the scroll to complete
+            await self._page.await_timeout(100)
+            
+            return {
+                "direction": direction,
+                "distance": distance,
+                "method": "simple_script",
+                "success": True
+            }
+        except Exception as e:
+            return {
+                "direction": direction,
+                "distance": distance,
+                "error": str(e),
+                "success": False
+            } 

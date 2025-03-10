@@ -104,16 +104,51 @@ async def _type(browser, element_id: int, text: str) -> Dict[str, Any]:
 
 async def _scroll(browser, direction: str, distance: int = 300) -> Dict[str, Any]:
     """Scroll the page."""
-    if direction == "up":
-        await browser._page.aevaluate(f"window.scrollBy(0, -{distance})")
-    elif direction == "down":
-        await browser._page.aevaluate(f"window.scrollBy(0, {distance})")
-    elif direction == "left":
-        await browser._page.aevaluate(f"window.scrollBy(-{distance}, 0)")
-    elif direction == "right":
-        await browser._page.aevaluate(f"window.scrollBy({distance}, 0)")
+    # Try the main scroll_page method first
+    try:
+        result = await browser.scroll_page(direction, distance)
+        if result.get("success", False):
+            return result
+    except Exception as e:
+        print(f"Primary scroll method failed: {str(e)}")
     
-    return {"direction": direction, "distance": distance}
+    # If the main method fails, try the simple_scroll method
+    try:
+        result = await browser.simple_scroll(direction, distance)
+        if result.get("success", False):
+            return result
+    except Exception as e:
+        print(f"Simple scroll method failed: {str(e)}")
+    
+    # If both methods fail, try the most basic approach
+    try:
+        if direction == "up":
+            await browser._page.evaluate(f"window.scrollBy(0, -{distance});")
+        elif direction == "down":
+            await browser._page.evaluate(f"window.scrollBy(0, {distance});")
+        elif direction == "left":
+            await browser._page.evaluate(f"window.scrollBy(-{distance}, 0);")
+        elif direction == "right":
+            await browser._page.evaluate(f"window.scrollBy({distance}, 0);")
+        
+        # Wait a short time for the scroll to complete
+        await browser._page.await_timeout(100)
+        
+        return {
+            "direction": direction, 
+            "distance": distance,
+            "method": "basic_evaluate",
+            "success": True
+        }
+    except Exception as e:
+        # All methods failed, return error information
+        print(f"All scroll methods failed: {str(e)}")
+        return {
+            "direction": direction, 
+            "distance": distance,
+            "error": str(e),
+            "success": False
+        }
 
 
 async def _enter(browser) -> Dict[str, Any]:
