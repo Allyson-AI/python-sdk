@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from allyson.plan import Plan
+
 
 def get_agent_system_prompt(
     current_time: str,

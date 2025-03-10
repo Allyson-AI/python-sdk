@@ -11,5 +11,6 @@ from allyson.agent import Agent
 from allyson.dom_extractor import DOMExtractor
 from allyson.agent_loop import AgentLoop
 from allyson.tools import Tool, ToolType
+from allyson.plan import Plan, PlanStep
 
-__all__ = ["Browser", "Page", "Element", "Agent", "DOMExtractor", "AgentLoop", "Tool", "ToolType"] 
+__all__ = ["Browser", "Page", "Element", "Agent", "DOMExtractor", "AgentLoop", "Tool", "ToolType", "Plan", "PlanStep"] 
