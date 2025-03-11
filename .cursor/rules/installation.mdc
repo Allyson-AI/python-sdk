@@ -1,0 +1,10 @@
+---
+description: Installing new packages
+globs: 
+alwaysApply: false
+---
+
+# Always update when installing new packages
+
+- [requirements.txt](mdc:requirements.txt) 
+

@@ -1,0 +1,10 @@
+playwright>=1.40.0
+pytest-playwright>=0.4.0
+tqdm>=4.66.0
+pydantic>=2.0.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pillow>=10.0.0 
+playwright-stealth>=1.0.6
+tenacity>=8.0.0
+bs4>=0.0.1
